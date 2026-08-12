@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<title>로그인 · 거래처 관리</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    background: #f4f5f7;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .card {
+    background: white;
+    width: 100%;
+    max-width: 360px;
+    margin: 16px;
+    padding: 28px 24px;
+    border-radius: 16px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+  }
+  h1 {
+    font-size: 18px;
+    text-align: center;
+    margin: 0 0 24px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    color: #444;
+    margin-bottom: 14px;
+  }
+  input {
+    width: 100%;
+    margin-top: 6px;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #ddd;
+    font-size: 15px;
+  }
+  button {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background: #1f6feb;
+    color: white;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 8px;
+  }
+  button:disabled { opacity: 0.6; }
+  .error {
+    background: #fee2e2;
+    color: #b91c1c;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 14px;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🚚 거래처 관리 로그인</h1>
+    <div id="error" class="error"></div>
+    <form id="loginForm">
+      <label>아이디
+        <input id="username" type="text" autocomplete="username" required />
+      </label>
+      <label>비밀번호
+        <input id="password" type="password" autocomplete="current-password" required />
+      </label>
+      <button type="submit" id="submitBtn">로그인</button>
+    </form>
+  </div>
+
+<script>
+  const form = document.getElementById('loginForm');
+  const errorBox = document.getElementById('error');
+  const submitBtn = document.getElementById('submitBtn');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorBox.style.display = 'none';
+    submitBtn.disabled = true;
+
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: document.getElementById('username').value.trim(),
+          password: document.getElementById('password').value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '로그인에 실패했습니다.');
+      window.location.href = '/';
+    } catch (err) {
+      errorBox.textContent = err.message;
+      errorBox.style.display = 'block';
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,275 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  background: #f4f5f7;
+  color: #1f2430;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #1f6feb;
+  color: white;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.topbar h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.topbar-actions .btn {
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.role-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  background: rgba(255,255,255,0.2);
+  padding: 2px 8px;
+  border-radius: 10px;
+  vertical-align: middle;
+  margin-left: 4px;
+}
+
+.modal form input:disabled,
+.modal form textarea:disabled {
+  background: #f4f5f7;
+  color: #555;
+}
+
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  background: #e5e7eb;
+  color: #1f2430;
+}
+
+.btn.primary {
+  background: white;
+  color: #1f6feb;
+  font-weight: 600;
+}
+
+.btn.danger {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.layout {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 52px);
+}
+
+.map {
+  flex: 1 1 55%;
+  min-height: 260px;
+  width: 100%;
+}
+
+.list-panel {
+  flex: 1 1 45%;
+  display: flex;
+  flex-direction: column;
+  background: white;
+  border-top: 1px solid #e5e7eb;
+  overflow: hidden;
+}
+
+.search-box {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.search-box input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  font-size: 15px;
+}
+
+.client-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.client-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.client-item:active {
+  background: #f4f8ff;
+}
+
+.client-info .name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.client-info .addr {
+  font-size: 13px;
+  color: #666;
+  margin-top: 2px;
+}
+
+.client-info .meta {
+  font-size: 12px;
+  color: #999;
+  margin-top: 4px;
+}
+
+.client-item .go-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+
+.empty-state {
+  padding: 30px 16px;
+  text-align: center;
+  color: #999;
+  font-size: 14px;
+}
+
+/* 모달 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modal-overlay.hidden {
+  display: none;
+}
+
+.modal {
+  background: white;
+  width: 100%;
+  max-width: 480px;
+  border-radius: 16px 16px 0 0;
+  padding: 20px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+@media (min-width: 640px) {
+  .modal-overlay {
+    align-items: center;
+  }
+  .modal {
+    border-radius: 16px;
+  }
+}
+
+.modal h2 {
+  margin: 0 0 16px;
+  font-size: 18px;
+}
+
+.modal form label {
+  display: block;
+  font-size: 13px;
+  color: #444;
+  margin-bottom: 12px;
+}
+
+.modal form input,
+.modal form textarea {
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  font-size: 15px;
+  font-family: inherit;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.modal-actions .btn {
+  flex: 1;
+}
+
+.form-error {
+  background: #fee2e2;
+  color: #b91c1c;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.form-error.hidden {
+  display: none;
+}
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1f2430;
+  color: white;
+  padding: 10px 18px;
+  border-radius: 20px;
+  font-size: 13px;
+  z-index: 60;
+}
+
+.toast.hidden {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .layout {
+    flex-direction: row;
+  }
+  .map {
+    flex: 1 1 65%;
+    height: 100%;
+  }
+  .list-panel {
+    flex: 1 1 35%;
+    max-width: 380px;
+    border-top: none;
+    border-left: 1px solid #e5e7eb;
+    height: 100%;
+  }
+}

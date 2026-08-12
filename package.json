@@ -1,0 +1,17 @@
+{
+  "name": "transport-client-map",
+  "version": "1.0.0",
+  "description": "운반 회사 거래처 관리 + 지도 확인 웹앱",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "express-session": "^1.18.0",
+    "helmet": "^7.1.0",
+    "node-fetch": "^2.7.0"
+  }
+}

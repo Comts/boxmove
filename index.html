@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<title>거래처 관리 · 지도</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🚚 거래처 관리 <span id="roleBadge" class="role-badge"></span></h1>
+  <div class="topbar-actions">
+    <button id="addBtn" class="btn primary hidden">+ 신규 거래처</button>
+    <button id="logoutBtn" class="btn">로그아웃</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section id="map" class="map"></section>
+
+  <section class="list-panel">
+    <div class="search-box">
+      <input id="searchInput" type="text" placeholder="회사명, 주소, 담당자 검색" />
+    </div>
+    <ul id="clientList" class="client-list"></ul>
+  </section>
+</main>
+
+<!-- 신규/수정 거래처 모달 -->
+<div id="modalOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="modalTitle">신규 거래처 추가</h2>
+    <form id="clientForm">
+      <input type="hidden" id="clientId" />
+      <label>회사명 *
+        <input id="fName" type="text" required placeholder="예: 삼성물류창고" />
+      </label>
+      <label>주소 *
+        <input id="fAddress" type="text" required placeholder="예: 서울특별시 강남구 테헤란로 152" />
+      </label>
+      <label>담당자
+        <input id="fManager" type="text" placeholder="예: 김철수" />
+      </label>
+      <label>연락처
+        <input id="fPhone" type="tel" placeholder="예: 010-1234-5678" />
+      </label>
+      <label>메모
+        <textarea id="fMemo" rows="2" placeholder="상하차 시간, 주의사항 등"></textarea>
+      </label>
+
+      <div id="formError" class="form-error hidden"></div>
+
+      <div class="modal-actions">
+        <button type="button" id="cancelBtn" class="btn">취소</button>
+        <button type="submit" id="deleteBtn" class="btn danger hidden">삭제</button>
+        <button type="submit" id="saveBtn" class="btn primary">저장</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
