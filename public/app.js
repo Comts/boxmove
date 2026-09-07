@@ -36,7 +36,7 @@ function loadNaverMapsScript(clientId) {
       return;
     }
     const script = document.createElement('script');
-    script.src = `https://oapi.map.naver.com/openapi/v3/maps.js?ncpClientId=${clientId}`;
+    script.src = `https://oapi.map.naver.com/openapi/v3/maps.js?ncpKeyId=${clientId}`;
     script.onload = resolve;
     script.onerror = () => {
       showToast('네이버 지도를 불러오지 못했습니다.');
