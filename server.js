@@ -35,7 +35,15 @@ app.use(helmet({
       scriptSrc: ["'self'", 'https://oapi.map.naver.com', 'https://openapi.map.naver.com'],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'", 'https://oapi.map.naver.com', 'https://openapi.map.naver.com', 'https://naveropenapi.apigw.ntruss.com'],
+      connectSrc: [
+  "'self'",
+  'https://oapi.map.naver.com',
+  'https://openapi.map.naver.com',
+  'https://naveropenapi.apigw.ntruss.com',
+  'https://*.map.naver.com',
+  'https://*.map.naver.net',
+  'https://*.pstatic.net'
+],
       frameSrc: ["'self'", 'https://oapi.map.naver.com', 'https://openapi.map.naver.com']
     }
   }
