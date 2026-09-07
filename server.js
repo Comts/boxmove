@@ -32,7 +32,14 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", 'https://oapi.map.naver.com', 'https://openapi.map.naver.com'],
+      scriptSrc: [
+  "'self'",
+  'https://oapi.map.naver.com',
+  'https://openapi.map.naver.com',
+  'https://*.pstatic.net',
+  'https://*.map.naver.com',
+  'https://*.map.naver.net'
+],
       styleSrc: ["'self'", "'unsafe-inline'"],
       imgSrc: ["'self'", 'data:', 'https:'],
       connectSrc: [
