@@ -127,8 +127,8 @@ app.get('/api/me', (req, res) => {
 });
 
 // ---------- 로그인 페이지는 인증 없이 접근 허용 ----------
-app.get('/login', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+app.get('/login.js', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.js'));
 });
 
 // ---------- 이 아래는 전부 로그인 필요 ----------
