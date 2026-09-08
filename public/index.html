@@ -20,10 +20,43 @@
   <section id="map" class="map"></section>
 
   <section class="list-panel">
-    <div class="search-box">
-      <input id="searchInput" type="text" placeholder="회사명, 주소, 담당자 검색" />
+    <div class="tab-switcher">
+      <button id="tabClients" class="tab-btn">전체 거래처</button>
+      <button id="tabSchedule" class="tab-btn">오늘의 배차</button>
     </div>
-    <ul id="clientList" class="client-list"></ul>
+
+    <div id="clientsView">
+      <div class="search-box">
+        <input id="searchInput" type="text" placeholder="회사명, 주소, 담당자 검색" />
+      </div>
+      <ul id="clientList" class="client-list"></ul>
+    </div>
+
+    <div id="scheduleView" class="hidden">
+      <div class="schedule-date-box">
+        <button id="schedulePrevDay" class="btn" type="button">‹</button>
+        <input type="date" id="scheduleDate" />
+        <button id="scheduleNextDay" class="btn" type="button">›</button>
+      </div>
+
+      <div id="scheduleAddBox" class="schedule-add-box hidden">
+        <select id="scheduleAddSelect">
+          <option value="">거래처 선택해서 추가...</option>
+        </select>
+        <button id="scheduleAddBtn" class="btn" type="button">+ 추가</button>
+      </div>
+
+      <div id="scheduleStartBox" class="schedule-start-box hidden">
+        <button id="scheduleStartBtn" class="btn primary" type="button">🚚 오늘 배차 시작</button>
+      </div>
+      <div id="scheduleStartedInfo" class="schedule-started-info hidden"></div>
+
+      <ol id="scheduleList" class="schedule-list"></ol>
+
+      <div id="scheduleAdminActions" class="schedule-admin-actions hidden">
+        <button id="scheduleSaveBtn" class="btn primary" type="button">순서 저장</button>
+      </div>
+    </div>
   </section>
 </main>
 
