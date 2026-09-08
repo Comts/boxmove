@@ -11,6 +11,7 @@ const fetch = require('node-fetch');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'data', 'clients.json');
+const SCHEDULE_FILE = path.join(__dirname, 'data', 'schedule.json');
 const isProd = process.env.NODE_ENV === 'production';
 
 // Render/여러 호스팅은 프록시 뒤에서 동작하므로, 보안 쿠키(secure)가 제대로 동작하려면 필요
@@ -32,25 +33,14 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: [
-  "'self'",
-  'https://oapi.map.naver.com',
-  'https://openapi.map.naver.com',
-  'https://*.pstatic.net',
-  'https://*.map.naver.com',
-  'https://*.map.naver.net'
-],
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      // 네이버 지도 SDK가 스타일/타일 데이터를 여러 서브도메인(pstatic.net, map.naver.net 등)에 나눠서
+      // 스크립트/네트워크 요청으로 불러오기 때문에, 도메인을 일일이 나열하는 대신 https 전체를 허용합니다.
+      // (인라인 스크립트/데이터URL 스크립트 실행은 여전히 차단되어 최소한의 보호는 유지됩니다.)
+      scriptSrc: ["'self'", 'https:'],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: [
-  "'self'",
-  'https://oapi.map.naver.com',
-  'https://openapi.map.naver.com',
-  'https://naveropenapi.apigw.ntruss.com',
-  'https://*.map.naver.com',
-  'https://*.map.naver.net',
-  'https://*.pstatic.net'
-],
+      connectSrc: ["'self'", 'https:'],
+      fontSrc: ["'self'", 'https:', 'data:'],
       frameSrc: ["'self'", 'https://oapi.map.naver.com', 'https://openapi.map.naver.com']
     }
   }
@@ -145,6 +135,8 @@ app.get('/api/me', (req, res) => {
 app.get('/login', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.html'));
 });
+
+// 로그인 페이지가 쓰는 스크립트도 인증 없이 접근 허용 (CSP 상 인라인 스크립트를 쓸 수 없어 별도 파일로 분리)
 app.get('/login.js', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'login.js'));
 });
@@ -188,6 +180,22 @@ function genId() {
 function sanitizeText(value, maxLen) {
   if (typeof value !== 'string') return '';
   return value.trim().slice(0, maxLen);
+}
+
+// ---------- 배차 일정 데이터 헬퍼 ----------
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+function readSchedule() {
+  try {
+    const raw = fs.readFileSync(SCHEDULE_FILE, 'utf-8');
+    return JSON.parse(raw || '{}');
+  } catch (err) {
+    return {};
+  }
+}
+
+function writeSchedule(schedule) {
+  fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedule, null, 2), 'utf-8');
 }
 
 // ---------- 프론트엔드용 설정(공개 가능한 지도 클라이언트 ID만 전달) ----------
@@ -283,6 +291,130 @@ app.delete('/api/clients/:id', requireAdmin, (req, res) => {
   res.status(204).end();
 });
 
+// ---------- 배차 일정 (특정 날짜에 어떤 거래처를 어떤 순서로, 언제 갔는지) ----------
+// 저장 형식: schedule[date] = { startedAt: ISO문자열|null, items: [{ clientId, completedAt: ISO문자열|null }] }
+// (예전 형식들도 계속 읽을 수 있도록 호환 처리)
+function normalizeScheduleEntry(rawEntry) {
+  if (!rawEntry) return { startedAt: null, items: [] };
+
+  const rawItems = Array.isArray(rawEntry) ? rawEntry : rawEntry.items;
+  const startedAt = Array.isArray(rawEntry) ? null : (rawEntry.startedAt || null);
+
+  const items = (Array.isArray(rawItems) ? rawItems : []).map(item => {
+    if (typeof item === 'string') return { clientId: item, completedAt: null };
+    return {
+      clientId: item.clientId,
+      completedAt: item.completedAt || (item.done ? new Date(0).toISOString() : null)
+    };
+  });
+
+  return { startedAt, items };
+}
+
+app.get('/api/schedule', (req, res) => {
+  const date = req.query.date;
+  if (!date || !DATE_PATTERN.test(date)) {
+    return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
+  }
+
+  const schedule = readSchedule();
+  const entry = normalizeScheduleEntry(schedule[date]);
+  const clients = readClients();
+  const clientById = Object.fromEntries(clients.map(c => [c.id, c]));
+
+  // 순서를 유지하면서, 이미 삭제된 거래처는 목록에서 자동으로 제외
+  const orderedClients = entry.items
+    .filter(item => clientById[item.clientId])
+    .map(item => ({ ...clientById[item.clientId], completedAt: item.completedAt }));
+
+  res.json({
+    date,
+    startedAt: entry.startedAt,
+    clientIds: orderedClients.map(c => c.id),
+    clients: orderedClients
+  });
+});
+
+app.put('/api/schedule', requireAdmin, (req, res) => {
+  const date = req.query.date;
+  if (!date || !DATE_PATTERN.test(date)) {
+    return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
+  }
+
+  const clientIds = req.body?.clientIds;
+  if (!Array.isArray(clientIds) || !clientIds.every(id => typeof id === 'string')) {
+    return res.status(400).json({ error: 'clientIds는 문자열 배열이어야 합니다.' });
+  }
+
+  // 실제 존재하는 거래처 id만 저장 (중복 제거, 순서는 그대로 유지)
+  const existingIds = new Set(readClients().map(c => c.id));
+  const seen = new Set();
+  const cleanIds = clientIds.filter(id => {
+    if (!existingIds.has(id) || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+
+  const schedule = readSchedule();
+  const existingEntry = normalizeScheduleEntry(schedule[date]);
+  // 기존에 체크되어 있던 완료 시각은 그대로 유지하고, 새로 추가된 거래처만 완료 전 상태로 시작
+  const previousCompletedAt = new Map(existingEntry.items.map(item => [item.clientId, item.completedAt]));
+  const newItems = cleanIds.map(clientId => ({ clientId, completedAt: previousCompletedAt.get(clientId) || null }));
+
+  if (newItems.length === 0) {
+    delete schedule[date];
+  } else {
+    schedule[date] = { startedAt: existingEntry.startedAt, items: newItems };
+  }
+  writeSchedule(schedule);
+
+  res.json({ date, clientIds: cleanIds });
+});
+
+// 아침에 오늘 배차를 시작할 때 누르는 버튼 (관리자, 기사님 계정 모두 가능)
+app.patch('/api/schedule/start', (req, res) => {
+  const date = req.query.date;
+  if (!date || !DATE_PATTERN.test(date)) {
+    return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
+  }
+
+  const schedule = readSchedule();
+  const entry = normalizeScheduleEntry(schedule[date]);
+  entry.startedAt = new Date().toISOString();
+  schedule[date] = entry;
+  writeSchedule(schedule);
+
+  res.json({ date, startedAt: entry.startedAt });
+});
+
+// 납품 완료 체크 (관리자, 기사님 계정 모두 가능 - 순서 변경 권한과는 별개)
+// 체크할 때마다 완료 시각이 기록되고, 이후 거래처들의 예상 도착시간 계산 기준이 바뀝니다.
+app.patch('/api/schedule/complete', (req, res) => {
+  const date = req.query.date;
+  if (!date || !DATE_PATTERN.test(date)) {
+    return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
+  }
+
+  const { clientId, done } = req.body || {};
+  if (typeof clientId !== 'string' || typeof done !== 'boolean') {
+    return res.status(400).json({ error: 'clientId(문자열), done(boolean)이 필요합니다.' });
+  }
+
+  const schedule = readSchedule();
+  const entry = normalizeScheduleEntry(schedule[date]);
+  const target = entry.items.find(item => item.clientId === clientId);
+
+  if (!target) {
+    return res.status(404).json({ error: '해당 날짜의 배차 목록에서 거래처를 찾을 수 없습니다.' });
+  }
+
+  target.completedAt = done ? new Date().toISOString() : null;
+  schedule[date] = entry;
+  writeSchedule(schedule);
+
+  res.json({ date, clientId, completedAt: target.completedAt });
+});
+
 // ---------- 네이버 지오코딩 ----------
 async function geocodeAddress(address) {
   const clientId = process.env.NAVER_MAPS_CLIENT_ID;
@@ -291,7 +423,7 @@ async function geocodeAddress(address) {
   if (!clientId || !clientSecret) {
     throw new Error('서버에 NAVER_MAPS_CLIENT_ID / NAVER_MAPS_CLIENT_SECRET 환경변수가 설정되어 있지 않습니다.');
   }
-  
+
   const url = `https://maps.apigw.ntruss.com/map-geocode/v2/geocode?query=${encodeURIComponent(address)}`;
 
   const response = await fetch(url, {
