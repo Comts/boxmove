@@ -291,13 +291,14 @@ async function geocodeAddress(address) {
   if (!clientId || !clientSecret) {
     throw new Error('서버에 NAVER_MAPS_CLIENT_ID / NAVER_MAPS_CLIENT_SECRET 환경변수가 설정되어 있지 않습니다.');
   }
-
-  const url = `https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode?query=${encodeURIComponent(address)}`;
+  
+  const url = `https://maps.apigw.ntruss.com/map-geocode/v2/geocode?query=${encodeURIComponent(address)}`;
 
   const response = await fetch(url, {
     headers: {
-      'X-NCP-APIGW-API-KEY-ID': clientId,
-      'X-NCP-APIGW-API-KEY-SECRET': clientSecret
+      'x-ncp-apigw-api-key-id': clientId,
+      'x-ncp-apigw-api-key': clientSecret,
+      'Accept': 'application/json'
     }
   });
 
