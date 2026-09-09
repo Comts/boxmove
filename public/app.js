@@ -18,11 +18,11 @@ const AVG_SPEED_KMH = 30;
 // 달력 탭 상태 (지도 없이 날짜별 배차 목록만 보는 화면)
 let calendarMonth = todayDateString().slice(0, 7); // 'YYYY-MM'
 let calendarSelectedDate = todayDateString();
-let calendarClientIds = [];
-let calendarCompletedMap = new Map();
-let calendarNoteMap = new Map();
+let calendarWeekDates = []; // 선택한 날짜가 속한 주(일~토) 7개 날짜
+let calendarWeekData = new Map(); // date -> { clientIds, completedMap, noteMap }
 let calendarCounts = {}; // { 'YYYY-MM-DD': 건수 }
 let calDragIndex = null;
+let calDragDate = null;
 
 const el = id => document.getElementById(id);
 
@@ -55,7 +55,6 @@ function applyRoleUI() {
   el('addBtn').classList.toggle('hidden', !isAdmin);
   el('scheduleAddBox').classList.toggle('hidden', !isAdmin);
   el('scheduleAdminActions').classList.toggle('hidden', !isAdmin);
-  el('calAddBox').classList.toggle('hidden', !isAdmin);
 
   const badge = el('roleBadge');
   if (badge) {
@@ -581,6 +580,7 @@ function renderCalendarGrid() {
     const cell = document.createElement('div');
     cell.className = 'cal-cell';
     if (dateStr === today) cell.classList.add('today');
+    if (calendarWeekDates.includes(dateStr)) cell.classList.add('in-week');
     if (dateStr === calendarSelectedDate) cell.classList.add('selected');
 
     const count = calendarCounts[dateStr] || 0;
@@ -593,167 +593,243 @@ function renderCalendarGrid() {
   }
 }
 
+// 특정 날짜가 속한 주(일요일~토요일) 7개 날짜를 구합니다.
+function getWeekDates(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = d.getDay();
+  const sunday = new Date(d);
+  sunday.setDate(d.getDate() - dow);
+  const result = [];
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(sunday);
+    day.setDate(sunday.getDate() + i);
+    result.push(dateStringFrom(day));
+  }
+  return result;
+}
+
+async function fetchDaySchedule(date) {
+  try {
+    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}`);
+    return {
+      clientIds: data.clientIds,
+      completedMap: new Map(data.clients.map(c => [c.id, c.completedAt])),
+      noteMap: new Map(data.clients.map(c => [c.id, c.note || '']))
+    };
+  } catch (err) {
+    return { clientIds: [], completedMap: new Map(), noteMap: new Map() };
+  }
+}
+
 async function selectCalendarDate(dateStr) {
   calendarSelectedDate = dateStr;
+  calendarWeekDates = getWeekDates(dateStr);
   renderCalendarGrid();
-  el('calSelectedLabel').textContent = formatDateLabel(dateStr);
-
-  try {
-    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(dateStr)}`);
-    calendarClientIds = data.clientIds;
-    calendarCompletedMap = new Map(data.clients.map(c => [c.id, c.completedAt]));
-    calendarNoteMap = new Map(data.clients.map(c => [c.id, c.note || '']));
-  } catch (err) {
-    calendarClientIds = [];
-    calendarCompletedMap = new Map();
-    calendarNoteMap = new Map();
-    showToast(err.message);
-  }
-
-  renderCalendarScheduleList();
+  await loadCalendarWeek();
 }
 
-function populateCalendarAddSelect() {
-  const select = el('calAddSelect');
-  if (!select) return;
-  const current = select.value;
-  select.innerHTML = '<option value="">거래처 선택해서 추가...</option>';
-  clients
-    .filter(c => !calendarClientIds.includes(c.id))
-    .forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.id;
-      opt.textContent = `${c.name} (${c.address})`;
-      select.appendChild(opt);
-    });
-  select.value = current && !calendarClientIds.includes(current) ? current : '';
+async function loadCalendarWeek() {
+  const results = await Promise.all(calendarWeekDates.map(fetchDaySchedule));
+  calendarWeekData = new Map(calendarWeekDates.map((d, i) => [d, results[i]]));
+  renderCalendarWeekStrip();
 }
 
-function renderCalendarScheduleList() {
+// 선택한 날짜가 속한 주(일~토)를 한 줄에 나란히 보여줍니다.
+// 실제 납품을 가지 않는 토/일요일은 좁게, 월~금은 넓게 표시합니다.
+function renderCalendarWeekStrip() {
+  const strip = el('calWeekStrip');
+  strip.innerHTML = '';
+
   const isAdmin = currentRole === 'admin';
-  const list = el('calScheduleList');
-  list.innerHTML = '';
+  const today = todayDateString();
+  const dowNames = ['일', '월', '화', '수', '목', '금', '토'];
 
-  el('calAddBox').classList.toggle('hidden', !isAdmin);
+  calendarWeekDates.forEach((dateStr, dowIndex) => {
+    const isWeekend = dowIndex === 0 || dowIndex === 6;
+    const dayData = calendarWeekData.get(dateStr) || { clientIds: [], completedMap: new Map(), noteMap: new Map() };
+    const dayNum = Number(dateStr.split('-')[2]);
 
-  const scheduleClients = calendarClientIds
-    .map(id => clients.find(c => c.id === id))
-    .filter(Boolean);
+    const col = document.createElement('div');
+    col.className = 'cal-day-col'
+      + (isWeekend ? ' weekend' : '')
+      + (dateStr === today ? ' today' : '')
+      + (dateStr === calendarSelectedDate ? ' selected-day' : '');
 
-  if (scheduleClients.length === 0) {
-    list.innerHTML = `<li class="empty-state">${calendarSelectedDate}에 등록된 배차가 없습니다.${isAdmin ? ' 아래에서 거래처를 선택해 추가해주세요.' : ''}</li>`;
-    populateCalendarAddSelect();
-    return;
-  }
+    const header = document.createElement('div');
+    header.className = 'cal-day-col-header';
+    header.innerHTML = `<span class="cal-day-dow">${dowNames[dowIndex]}</span><span class="cal-day-num">${dayNum}</span>`;
+    col.appendChild(header);
 
-  scheduleClients.forEach((client, index) => {
-    const completedAt = calendarCompletedMap.get(client.id) || null;
-    const isDone = !!completedAt;
-    const note = calendarNoteMap.get(client.id) || '';
+    const listEl = document.createElement('ul');
+    listEl.className = 'cal-day-list';
 
-    const li = document.createElement('li');
-    li.className = 'schedule-item cal-item' + (isDone ? ' done' : '');
-    li.dataset.index = String(index);
+    const dayClients = dayData.clientIds.map(id => clients.find(c => c.id === id)).filter(Boolean);
 
-    li.innerHTML = `
-      ${isAdmin ? '<div class="drag-handle" title="드래그해서 순서 변경">⠿</div>' : ''}
-      <div class="schedule-order-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</div>
-      <div class="schedule-item-info">
-        <div class="name">${escapeHtml(client.name)}</div>
-        <div class="addr">${escapeHtml(client.address)}</div>
-        <div class="cal-note-wrap"></div>
-      </div>
-    `;
+    if (dayClients.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'cal-day-empty';
+      empty.textContent = '-';
+      listEl.appendChild(empty);
+    } else {
+      dayClients.forEach((client, index) => {
+        const completedAt = dayData.completedMap.get(client.id) || null;
+        const isDone = !!completedAt;
+        const note = dayData.noteMap.get(client.id) || '';
 
-    const noteWrap = li.querySelector('.cal-note-wrap');
-    if (isAdmin) {
-      const noteInput = document.createElement('input');
-      noteInput.type = 'text';
-      noteInput.className = 'cal-note-input';
-      noteInput.placeholder = '납품 수량 메모 (예: 20박스)';
-      noteInput.value = note;
-      noteInput.maxLength = 200;
-      noteInput.addEventListener('blur', () => saveCalendarNote(client.id, noteInput.value));
-      noteWrap.appendChild(noteInput);
-    } else if (note) {
-      const noteText = document.createElement('div');
-      noteText.className = 'cal-note-text';
-      noteText.textContent = `📦 ${note}`;
-      noteWrap.appendChild(noteText);
+        const li = document.createElement('li');
+        li.className = 'cal-day-item' + (isDone ? ' done' : '');
+        li.dataset.index = String(index);
+        li.title = `${client.name} · ${client.address}`;
+
+        li.innerHTML = `
+          <div class="cal-day-item-top">
+            <span class="cal-day-item-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</span>
+            <span class="cal-day-item-name">${escapeHtml(client.name)}</span>
+          </div>
+        `;
+
+        if (isAdmin) {
+          const removeBtn = document.createElement('button');
+          removeBtn.type = 'button';
+          removeBtn.className = 'cal-day-remove-btn';
+          removeBtn.textContent = '×';
+          removeBtn.addEventListener('click', () => removeDayItem(dateStr, index));
+          li.appendChild(removeBtn);
+
+          const noteInput = document.createElement('input');
+          noteInput.type = 'text';
+          noteInput.className = 'cal-day-note-input';
+          noteInput.placeholder = '수량';
+          noteInput.value = note;
+          noteInput.maxLength = 200;
+          noteInput.addEventListener('blur', () => saveDayNote(dateStr, client.id, noteInput.value));
+          li.appendChild(noteInput);
+
+          li.draggable = true;
+          li.addEventListener('dragstart', (e) => {
+            calDragIndex = index;
+            calDragDate = dateStr;
+            e.dataTransfer.effectAllowed = 'move';
+            li.classList.add('dragging');
+          });
+          li.addEventListener('dragend', () => {
+            li.classList.remove('dragging');
+            listEl.querySelectorAll('.cal-day-item').forEach(item => item.classList.remove('drag-over'));
+          });
+          li.addEventListener('dragover', (e) => {
+            if (calDragDate !== dateStr) return; // 같은 날짜 안에서만 순서 변경 가능
+            e.preventDefault();
+            li.classList.add('drag-over');
+          });
+          li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+          li.addEventListener('drop', (e) => {
+            if (calDragDate !== dateStr) return;
+            e.preventDefault();
+            li.classList.remove('drag-over');
+            const targetIndex = Number(li.dataset.index);
+            if (calDragIndex === null || calDragIndex === targetIndex) return;
+            const [moved] = dayData.clientIds.splice(calDragIndex, 1);
+            dayData.clientIds.splice(targetIndex, 0, moved);
+            calDragIndex = null;
+            calDragDate = null;
+            renderCalendarWeekStrip();
+            saveDayOrder(dateStr);
+          });
+        } else if (note) {
+          const noteText = document.createElement('div');
+          noteText.className = 'cal-day-note-text';
+          noteText.textContent = `📦${note}`;
+          li.appendChild(noteText);
+        }
+
+        listEl.appendChild(li);
+      });
     }
 
-    if (isAdmin) {
-      const removeBtn = document.createElement('button');
-      removeBtn.type = 'button';
-      removeBtn.className = 'cal-remove-btn';
-      removeBtn.textContent = '×';
-      removeBtn.addEventListener('click', () => removeCalendarItem(index));
-      li.appendChild(removeBtn);
+    col.appendChild(listEl);
 
-      li.draggable = true;
-      li.addEventListener('dragstart', (e) => {
-        calDragIndex = index;
-        e.dataTransfer.effectAllowed = 'move';
-        li.classList.add('dragging');
+    if (isAdmin) {
+      const addWrap = document.createElement('div');
+      addWrap.className = 'cal-day-add';
+      const select = document.createElement('select');
+      select.className = 'cal-day-add-select';
+
+      const defaultOpt = document.createElement('option');
+      defaultOpt.value = '';
+      defaultOpt.textContent = '+ 추가';
+      select.appendChild(defaultOpt);
+
+      clients
+        .filter(c => !dayData.clientIds.includes(c.id))
+        .forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.id;
+          opt.textContent = c.name;
+          select.appendChild(opt);
+        });
+
+      select.addEventListener('change', () => {
+        const id = select.value;
+        if (!id) return;
+        addDayItem(dateStr, id);
       });
-      li.addEventListener('dragend', () => {
-        li.classList.remove('dragging');
-        list.querySelectorAll('.cal-item').forEach(item => item.classList.remove('drag-over'));
-      });
-      li.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        li.classList.add('drag-over');
-      });
-      li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
-      li.addEventListener('drop', (e) => {
-        e.preventDefault();
-        li.classList.remove('drag-over');
-        const targetIndex = Number(li.dataset.index);
-        if (calDragIndex === null || calDragIndex === targetIndex) return;
-        const [moved] = calendarClientIds.splice(calDragIndex, 1);
-        calendarClientIds.splice(targetIndex, 0, moved);
-        calDragIndex = null;
-        renderCalendarScheduleList();
-        saveCalendarOrder();
-      });
+
+      addWrap.appendChild(select);
+      col.appendChild(addWrap);
     }
 
-    list.appendChild(li);
+    strip.appendChild(col);
   });
-
-  populateCalendarAddSelect();
 }
 
-async function saveCalendarOrder() {
+async function saveDayOrder(date) {
+  const dayData = calendarWeekData.get(date);
+  if (!dayData) return;
   try {
-    await fetchJSON(`/api/schedule?date=${encodeURIComponent(calendarSelectedDate)}`, {
+    await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientIds: calendarClientIds })
+      body: JSON.stringify({ clientIds: dayData.clientIds })
     });
   } catch (err) {
     showToast(err.message);
   }
 }
 
-async function removeCalendarItem(index) {
-  calendarClientIds.splice(index, 1);
-  await saveCalendarOrder();
+async function removeDayItem(date, index) {
+  const dayData = calendarWeekData.get(date);
+  if (!dayData) return;
+  dayData.clientIds.splice(index, 1);
+  renderCalendarWeekStrip();
+  await saveDayOrder(date);
   await loadCalendarMonth(calendarMonth);
-  await selectCalendarDate(calendarSelectedDate);
   showToast('배차 목록에서 제외했습니다.');
 }
 
-async function saveCalendarNote(clientId, note) {
+async function addDayItem(date, clientId) {
+  const dayData = calendarWeekData.get(date);
+  if (!dayData) return;
+  dayData.clientIds.push(clientId);
+  dayData.completedMap.set(clientId, null);
+  dayData.noteMap.set(clientId, '');
+  renderCalendarWeekStrip();
+  await saveDayOrder(date);
+  await loadCalendarMonth(calendarMonth);
+  showToast('배차 목록에 추가했습니다.');
+}
+
+async function saveDayNote(date, clientId, note) {
+  const dayData = calendarWeekData.get(date);
+  if (!dayData) return;
   const trimmed = note.trim();
-  if ((calendarNoteMap.get(clientId) || '') === trimmed) return;
+  if ((dayData.noteMap.get(clientId) || '') === trimmed) return;
   try {
-    await fetchJSON(`/api/schedule/note?date=${encodeURIComponent(calendarSelectedDate)}`, {
+    await fetchJSON(`/api/schedule/note?date=${encodeURIComponent(date)}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clientId, note: trimmed })
     });
-    calendarNoteMap.set(clientId, trimmed);
+    dayData.noteMap.set(clientId, trimmed);
     showToast('메모를 저장했습니다.');
   } catch (err) {
     showToast(err.message);
@@ -926,18 +1002,6 @@ function bindEvents() {
   el('calNextMonth').addEventListener('click', () => {
     calendarMonth = shiftMonth(calendarMonth, 1);
     loadCalendarMonth(calendarMonth);
-  });
-
-  el('calAddBtn').addEventListener('click', async () => {
-    const select = el('calAddSelect');
-    const id = select.value;
-    if (!id) return;
-    calendarClientIds.push(id);
-    select.value = '';
-    await saveCalendarOrder();
-    await loadCalendarMonth(calendarMonth);
-    await selectCalendarDate(calendarSelectedDate);
-    showToast('배차 목록에 추가했습니다.');
   });
 }
 
