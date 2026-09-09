@@ -29,10 +29,13 @@
 
 | 계정 | 할 수 있는 것 | 용도 |
 |---|---|---|
-| 관리자 (`ADMIN_USERNAME` / `ADMIN_PASSWORD`) | 조회 + 등록 + 수정 + 삭제 | 배차 담당자, 사무실 관리자 |
-| 기사님 (`VIEWER_USERNAME` / `VIEWER_PASSWORD`) | 조회만 가능 | 운전 중인 기사님들과 공유 |
+| 관리자 (`ADMIN_USERNAME` / `ADMIN_PASSWORD`) | 조회 + 등록 + 수정 + 삭제, 3.5t/5t 모두 조작 가능 | 배차 담당자, 사무실 관리자 |
+| 3.5t 기사님 (`VIEWER_35T_USERNAME` / `VIEWER_35T_PASSWORD`) | 조회만 가능, 3.5t 배차만 | 3.5t 차량 운전 기사님 |
+| 5t 기사님 (`VIEWER_5T_USERNAME` / `VIEWER_5T_PASSWORD`) | 조회만 가능, 5t 배차만 | 5t 차량 운전 기사님 |
 
-두 계정 모두 여러 명이 같은 아이디/비밀번호를 함께 써도 되는 "공유 계정" 방식입니다 (기사님들끼리 같은 조회용 계정 공유, 관리자끼리 같은 관리자 계정 공유). 사람마다 개별 계정을 만들어서 "누가 언제 무엇을 수정했는지" 기록까지 남기고 싶으시면 말씀해주세요 — 이어서 작업해드릴 수 있습니다.
+기사님 계정은 차량별로 따로 있어서, 로그인하는 순간 서버가 "이 계정은 3.5t(또는 5t) 담당"이라는 걸 알고 화면 전환 없이 바로 본인 차량의 "오늘의 배차" 화면을 보여줍니다. 다른 차량으로 전환하는 버튼 자체가 보이지 않고, 혹시 요청을 직접 조작해도 서버가 차단합니다.
+
+세 계정 모두 같은 역할끼리는 여러 명이 같은 아이디/비밀번호를 함께 써도 되는 "공유 계정" 방식입니다. 사람마다 개별 계정을 만들어서 "누가 언제 무엇을 수정했는지" 기록까지 남기고 싶으시면 말씀해주세요 — 이어서 작업해드릴 수 있습니다.
 
 ## 0. 데이터베이스(Neon) 준비 (필수)
 
@@ -65,7 +68,7 @@ npm install
 cp .env.example .env
 ```
 
-`.env` 파일을 열어 아래 값을 모두 채워주세요. **보안 관련 항목(ADMIN_USERNAME, ADMIN_PASSWORD, VIEWER_USERNAME, VIEWER_PASSWORD, SESSION_SECRET)과 DATABASE_URL이 비어 있으면 서버가 실행되지 않습니다.**
+`.env` 파일을 열어 아래 값을 모두 채워주세요. **보안 관련 항목(ADMIN_USERNAME, ADMIN_PASSWORD, VIEWER_35T_USERNAME, VIEWER_35T_PASSWORD, VIEWER_5T_USERNAME, VIEWER_5T_PASSWORD, SESSION_SECRET)과 DATABASE_URL이 비어 있으면 서버가 실행되지 않습니다.**
 
 ```
 DATABASE_URL=Neon에서_복사한_연결_문자열
@@ -76,8 +79,10 @@ PORT=3000
 
 ADMIN_USERNAME=관리자_아이디
 ADMIN_PASSWORD=반드시_강력한_비밀번호로_변경
-VIEWER_USERNAME=기사님_아이디
-VIEWER_PASSWORD=이것도_반드시_강력한_비밀번호로_변경
+VIEWER_35T_USERNAME=3.5t_기사님_아이디
+VIEWER_35T_PASSWORD=반드시_강력한_비밀번호로_변경
+VIEWER_5T_USERNAME=5t_기사님_아이디
+VIEWER_5T_PASSWORD=이것도_반드시_강력한_비밀번호로_변경
 SESSION_SECRET=아래_명령으로_생성한_랜덤값
 NODE_ENV=development
 ```
@@ -111,12 +116,14 @@ npm start
    - `NAVER_MAPS_CLIENT_ID`
    - `NAVER_MAPS_CLIENT_SECRET`
    - `ADMIN_USERNAME` / `ADMIN_PASSWORD` — 등록·수정·삭제 가능한 관리자 계정 (강력한 비밀번호 권장)
-   - `VIEWER_USERNAME` / `VIEWER_PASSWORD` — 조회만 가능한 기사님 계정
+   - `VIEWER_35T_USERNAME` / `VIEWER_35T_PASSWORD` — 3.5t 차량 기사님 계정 (조회만 가능)
+   - `VIEWER_5T_USERNAME` / `VIEWER_5T_PASSWORD` — 5t 차량 기사님 계정 (조회만 가능)
    - `SESSION_SECRET` — 로컬에서 생성한 랜덤 문자열 (위 명령 참고)
    - `NODE_ENV` = `production`
 6. 배포 완료 후 발급되는 주소 (예: `https://transport-app.onrender.com`) 를 네이버 콘솔의 Web 서비스 URL에도 등록
-7. **기사님들에게는** 주소 + 기사님 계정(VIEWER) 아이디/비밀번호만 전달 → 조회만 가능
-   **관리자/배차 담당자에게는** 주소 + 관리자 계정(ADMIN) 아이디/비밀번호 전달 → 등록·수정·삭제 가능
+7. **3.5t 기사님에게는** 주소 + 3.5t 기사님 계정 아이디/비밀번호 전달 → 로그인하면 바로 3.5t 오늘의 배차 화면
+   **5t 기사님에게는** 주소 + 5t 기사님 계정 아이디/비밀번호 전달 → 로그인하면 바로 5t 오늘의 배차 화면
+   **관리자/배차 담당자에게는** 주소 + 관리자 계정(ADMIN) 아이디/비밀번호 전달 → 등록·수정·삭제 + 두 차량 모두 조작 가능
    폰 브라우저 접속 후 "홈 화면에 추가" 하면 앱처럼 사용 가능
 
 > ⚠️ 아이디/비밀번호는 거래처 정보를 지키는 유일한 장치입니다. 특히 관리자 계정 정보는 등록·수정·삭제 권한이 있으니 배차 담당자 등 꼭 필요한 사람에게만 전달하세요. 유출이 의심되면 Render Environment 탭에서 해당 비밀번호 값을 바로 변경할 수 있습니다 (변경 후 재배포되면 즉시 반영).
@@ -149,7 +156,7 @@ transport-app/
 ## 6. 보안 체크리스트 (배포 전 꼭 확인)
 
 - [ ] `DATABASE_URL`에 Neon 연결 문자열을 정확히 넣었는지
-- [ ] `ADMIN_PASSWORD`, `VIEWER_PASSWORD`를 기본값이 아닌 강력한 비밀번호로 바꿨는지
+- [ ] `ADMIN_PASSWORD`, `VIEWER_35T_PASSWORD`, `VIEWER_5T_PASSWORD`를 기본값이 아닌 강력한 비밀번호로 바꿨는지
 - [ ] `SESSION_SECRET`을 랜덤 값으로 생성해 넣었는지
 - [ ] 배포 환경에 `NODE_ENV=production`을 설정했는지
 - [ ] `.env` 파일을 GitHub에 올리지 않았는지 (`.gitignore`에 이미 포함되어 있어 기본적으로는 안전합니다)
