@@ -34,6 +34,11 @@
     </div>
 
     <div id="scheduleView" class="hidden">
+      <div class="vehicle-switcher">
+        <button type="button" class="vehicle-btn" data-vehicle="3.5t">3.5t</button>
+        <button type="button" class="vehicle-btn" data-vehicle="5t">5t</button>
+      </div>
+
       <div class="schedule-date-box">
         <button id="schedulePrevDay" class="btn" type="button">‹</button>
         <input type="date" id="scheduleDate" />
@@ -53,13 +58,14 @@
       <div id="scheduleStartedInfo" class="schedule-started-info hidden"></div>
 
       <ol id="scheduleList" class="schedule-list"></ol>
-
-      <div id="scheduleAdminActions" class="schedule-admin-actions hidden">
-        <button id="scheduleSaveBtn" class="btn primary" type="button">순서 저장</button>
-      </div>
     </div>
 
     <div id="calendarView" class="hidden">
+      <div class="vehicle-switcher">
+        <button type="button" class="vehicle-btn" data-vehicle="3.5t">3.5t</button>
+        <button type="button" class="vehicle-btn" data-vehicle="5t">5t</button>
+      </div>
+
       <div class="cal-month-nav">
         <button id="calPrevMonth" class="btn" type="button">‹</button>
         <div id="calMonthLabel" class="cal-month-label"></div>
@@ -67,8 +73,6 @@
       </div>
 
       <div id="calGrid" class="cal-grid"></div>
-
-      <div id="calWeekStrip" class="cal-week-strip"></div>
     </div>
   </section>
 </main>
