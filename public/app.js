@@ -3,6 +3,7 @@ let markers = [];
 let clients = [];
 let editingId = null;
 let currentRole = null; // 'admin' | 'viewer'
+let currentVehicle = null; // 기사님 계정일 때 본인이 모는 차량('3.5t'|'5t'). 관리자는 null(제한 없음)
 let activeTab = 'clients'; // 'clients' | 'schedule' | 'calendar'
 
 // 차량 선택 (차량별로 배차가 완전히 분리됩니다)
@@ -43,6 +44,13 @@ function todayDateString() {
 async function init() {
   const me = await fetchJSON('/api/me');
   currentRole = me.role;
+  currentVehicle = me.vehicle || null;
+
+  // 기사님 계정(3.5t/5t)은 본인이 모는 차량이 정해져 있으므로, 차량 선택을 그 값으로 고정합니다.
+  if (currentRole === 'viewer' && currentVehicle) {
+    selectedVehicle = currentVehicle;
+    localStorage.setItem('selectedVehicle', selectedVehicle);
+  }
 
   const config = await fetchJSON('/api/config');
   await loadNaverMapsScript(config.naverMapsClientId);
@@ -53,7 +61,7 @@ async function init() {
   applyRoleUI();
   applyVehicleUI();
 
-  // 기사님 계정은 로그인하면 바로 오늘의 배차 화면부터 보여줍니다.
+  // 기사님 계정은 로그인하면 바로 본인 차량의 오늘의 배차 화면부터 보여줍니다.
   switchTab(currentRole === 'viewer' ? 'schedule' : 'clients');
 }
 
@@ -61,10 +69,17 @@ function applyRoleUI() {
   const isAdmin = currentRole === 'admin';
   el('addBtn').classList.toggle('hidden', !isAdmin);
   el('scheduleAddBox').classList.toggle('hidden', !isAdmin);
+  // 기사님 계정은 본인 차량으로 고정이라 차량 전환 버튼 자체가 필요 없습니다 (관리자만 전환 가능).
+  const vehicleSwitcher = el('vehicleSwitcher');
+  if (vehicleSwitcher) vehicleSwitcher.classList.toggle('hidden', !isAdmin);
 
   const badge = el('roleBadge');
   if (badge) {
-    badge.textContent = isAdmin ? '관리자' : '조회 전용';
+    if (isAdmin) {
+      badge.textContent = '관리자';
+    } else {
+      badge.textContent = currentVehicle ? `${currentVehicle} 기사님` : '조회 전용';
+    }
   }
 }
 
@@ -77,6 +92,7 @@ function applyVehicleUI() {
 }
 
 function setSelectedVehicle(vehicle) {
+  if (currentRole === 'viewer') return; // 기사님 계정은 본인 차량으로 고정, 전환 불가
   if (vehicle === selectedVehicle) return;
   selectedVehicle = vehicle;
   localStorage.setItem('selectedVehicle', vehicle);
