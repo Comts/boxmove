@@ -648,9 +648,11 @@ function renderCalendarGrid() {
 
     grid.appendChild(weekRow);
 
-    // 선택한 날짜가 이 주(週)에 있으면, 이 행 바로 아래에 그 주의 배차 내용을 펼쳐서 보여줍니다.
+    // 선택한 날짜가 이 주(週)에 있으면, 이 행 바로 아래에 이번 주 + 다음 주 배차 내용을 함께 펼쳐서 보여줍니다.
     if (week.includes(calendarSelectedDate)) {
-      grid.appendChild(buildWeekStripNode());
+      const nextWeekDates = getNextWeekDates(calendarWeekDates);
+      grid.appendChild(buildWeekBlockNode(calendarWeekDates, '이번 주'));
+      grid.appendChild(buildWeekBlockNode(nextWeekDates, '다음 주'));
     }
   });
 }
@@ -668,6 +670,17 @@ function getWeekDates(dateStr) {
     result.push(dateStringFrom(day));
   }
   return result;
+}
+
+function addDaysToDateStr(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return dateStringFrom(d);
+}
+
+// weekDates(일~토 7개)를 그대로 7일 뒤로 밀어서 "다음 주"의 일~토 7개 날짜를 구합니다.
+function getNextWeekDates(weekDates) {
+  return weekDates.map(d => addDaysToDateStr(d, 7));
 }
 
 // 특정 날짜의 두 차량(3.5t, 5t) 배차를 한 번에 가져옵니다.
@@ -691,17 +704,35 @@ async function selectCalendarDate(dateStr) {
   await loadCalendarWeek();
 }
 
+// 선택한 주(週)와, 그 바로 다음 주까지 함께 볼 수 있도록 두 주(총 14일)의 배차를 미리 가져옵니다.
 async function loadCalendarWeek() {
-  const results = await Promise.all(calendarWeekDates.map(fetchDaySchedule));
-  calendarWeekData = new Map(calendarWeekDates.map((d, i) => [d, results[i]]));
+  const nextWeekDates = getNextWeekDates(calendarWeekDates);
+  const allDates = [...calendarWeekDates, ...nextWeekDates];
+  const results = await Promise.all(allDates.map(fetchDaySchedule));
+  calendarWeekData = new Map(allDates.map((d, i) => [d, results[i]]));
   renderCalendarGrid();
 }
 
-// 선택한 날짜가 속한 주(일~토)를 한 줄에 나란히 보여주는 영역을 만듭니다.
+// "이번 주"/"다음 주" 라벨 + 그 주의 배차 내용(buildWeekStripNode)을 함께 감싸는 블록을 만듭니다.
+function buildWeekBlockNode(weekDates, labelText) {
+  const block = document.createElement('div');
+  block.className = 'cal-week-block';
+
+  const label = document.createElement('div');
+  label.className = 'cal-week-block-label';
+  label.textContent = labelText;
+  block.appendChild(label);
+
+  block.appendChild(buildWeekStripNode(weekDates));
+
+  return block;
+}
+
+// 주어진 주(일~토 7개 날짜)를 한 줄에 나란히 보여주는 영역을 만듭니다.
 // 실제 납품을 가지 않는 토/일요일은 좁게, 월~금은 넓게 표시합니다.
 // 각 날짜 칸 안에는 3.5t/5t 두 차량의 배차가 반씩 나뉘어 동시에 보이고,
-// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜(또는 다른 차량) 칸으로 드래그해서 옮기는 것도 가능합니다.
-function buildWeekStripNode() {
+// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜(이번 주/다음 주 포함)나 다른 차량 칸으로 드래그해서 옮기는 것도 가능합니다.
+function buildWeekStripNode(weekDates) {
   const strip = document.createElement('div');
   strip.className = 'cal-week-strip';
 
@@ -709,7 +740,7 @@ function buildWeekStripNode() {
   const today = todayDateString();
   const dowNames = ['일', '월', '화', '수', '목', '금', '토'];
 
-  calendarWeekDates.forEach((dateStr, dowIndex) => {
+  weekDates.forEach((dateStr, dowIndex) => {
     const isWeekend = dowIndex === 0 || dowIndex === 6;
     const dayNum = Number(dateStr.split('-')[2]);
 
