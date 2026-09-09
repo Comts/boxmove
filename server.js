@@ -173,6 +173,7 @@ function sanitizeText(value, maxLen) {
 }
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_PATTERN = /^\d{4}-\d{2}$/;
 
 // ---------- 프론트엔드용 설정(공개 가능한 지도 클라이언트 ID만 전달) ----------
 app.get('/api/config', (req, res) => {
@@ -328,6 +329,39 @@ app.patch('/api/schedule/complete', asyncRoute(async (req, res) => {
   }
 
   res.json({ date, clientId, completedAt });
+}));
+
+// 그날 배차 항목의 메모(예: 납품 수량) 수정 - 관리자만 가능
+app.patch('/api/schedule/note', requireAdmin, asyncRoute(async (req, res) => {
+  const date = req.query.date;
+  if (!date || !DATE_PATTERN.test(date)) {
+    return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
+  }
+
+  const { clientId } = req.body || {};
+  if (typeof clientId !== 'string') {
+    return res.status(400).json({ error: 'clientId(문자열)가 필요합니다.' });
+  }
+
+  const note = sanitizeText(req.body?.note, 200);
+
+  const savedNote = await db.setItemNote(date, clientId, note);
+  if (savedNote === undefined) {
+    return res.status(404).json({ error: '해당 날짜의 배차 목록에서 거래처를 찾을 수 없습니다.' });
+  }
+
+  res.json({ date, clientId, note: savedNote });
+}));
+
+// 달력 화면에서 날짜별 배차 건수를 보여주기 위한 월별 집계 (모든 로그인 사용자 가능)
+app.get('/api/schedule/month', asyncRoute(async (req, res) => {
+  const month = req.query.month;
+  if (!month || !MONTH_PATTERN.test(month)) {
+    return res.status(400).json({ error: '월 형식이 올바르지 않습니다 (YYYY-MM).' });
+  }
+
+  const counts = await db.getScheduleCountsForMonth(month);
+  res.json({ month, counts });
 }));
 
 // ---------- 네이버 지오코딩 ----------
