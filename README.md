@@ -34,6 +34,18 @@
 
 두 계정 모두 여러 명이 같은 아이디/비밀번호를 함께 써도 되는 "공유 계정" 방식입니다 (기사님들끼리 같은 조회용 계정 공유, 관리자끼리 같은 관리자 계정 공유). 사람마다 개별 계정을 만들어서 "누가 언제 무엇을 수정했는지" 기록까지 남기고 싶으시면 말씀해주세요 — 이어서 작업해드릴 수 있습니다.
 
+## 0. 데이터베이스(Neon) 준비 (필수)
+
+거래처/배차 데이터는 이제 파일이 아니라 **Neon(무료 PostgreSQL 호스팅)** 에 저장됩니다. Render 같은 무료 호스팅은 서버가 재시작되거나 잠들었다 깨어날 때마다 로컬 파일이 초기화되기 때문에, 파일 저장 방식은 데이터가 사라질 수 있어 데이터베이스로 옮겼습니다. Neon은 이런 문제 없이 데이터를 계속 보관합니다.
+
+1. https://neon.tech 접속 후 GitHub 계정 등으로 가입 (무료, 카드 등록 불필요)
+2. 가입 후 뜨는 화면에서 **Create a project** (프로젝트 이름은 아무거나, 예: `boxmove`)
+3. 프로젝트 생성이 끝나면 **Connection string** (또는 Connection Details) 화면이 보입니다. `postgresql://...`로 시작하는 문자열 전체를 복사
+   - 이 문자열이 `.env`의 `DATABASE_URL` 값이자, Render Environment 탭에 등록할 값입니다.
+4. 문자열 끝에 `?sslmode=require`가 없다면 붙여주세요 (Neon은 보통 기본 포함되어 있습니다).
+
+> 무료 플랜은 일정 기간 접속이 없으면 DB가 "sleep" 상태가 될 수 있지만, 다음 요청이 오면 자동으로 깨어나며 **저장된 데이터는 사라지지 않습니다** (Render 파일 저장 방식과 다른 점입니다).
+
 ## 1. 네이버 지도 API 키 발급 (필수)
 
 1. https://console.ncloud.com 접속 후 회원가입/로그인
@@ -53,9 +65,11 @@ npm install
 cp .env.example .env
 ```
 
-`.env` 파일을 열어 아래 값을 모두 채워주세요. **보안 관련 항목(ADMIN_USERNAME, ADMIN_PASSWORD, VIEWER_USERNAME, VIEWER_PASSWORD, SESSION_SECRET)이 비어 있으면 서버가 실행되지 않습니다.**
+`.env` 파일을 열어 아래 값을 모두 채워주세요. **보안 관련 항목(ADMIN_USERNAME, ADMIN_PASSWORD, VIEWER_USERNAME, VIEWER_PASSWORD, SESSION_SECRET)과 DATABASE_URL이 비어 있으면 서버가 실행되지 않습니다.**
 
 ```
+DATABASE_URL=Neon에서_복사한_연결_문자열
+
 NAVER_MAPS_CLIENT_ID=발급받은_Client_ID
 NAVER_MAPS_CLIENT_SECRET=발급받은_Client_Secret
 PORT=3000
@@ -93,6 +107,7 @@ npm start
    - Build Command: `npm install`
    - Start Command: `npm start`
 5. **Environment** 탭에서 환경변수 추가 (전부 필수)
+   - `DATABASE_URL` — Neon에서 복사한 연결 문자열 (0번 항목 참고)
    - `NAVER_MAPS_CLIENT_ID`
    - `NAVER_MAPS_CLIENT_SECRET`
    - `ADMIN_USERNAME` / `ADMIN_PASSWORD` — 등록·수정·삭제 가능한 관리자 계정 (강력한 비밀번호 권장)
@@ -110,18 +125,20 @@ npm start
 
 ## 4. 데이터 저장 방식
 
-거래처 데이터는 `data/clients.json` 파일에 저장됩니다. 별도 데이터베이스 설치가 필요 없어 간단하지만, 배포 환경(Render 등)에 따라 재배포 시 파일이 초기화될 수 있습니다. 데이터를 안전하게 오래 보관하려면 추후 데이터베이스(Postgres 등) 연동을 권장드립니다 — 필요하시면 말씀해주세요, 이어서 작업해드릴 수 있습니다.
+거래처/배차 데이터는 **Neon(PostgreSQL) 데이터베이스**에 저장됩니다. 서버를 처음 실행하면 필요한 테이블(`clients`, `schedule_days`, `schedule_items`)이 자동으로 만들어지므로 별도로 테이블을 만들 필요는 없습니다.
+
+이전 버전에서는 `data/clients.json`, `data/schedule.json` 파일에 저장했는데, Render 같은 무료 호스팅은 서버가 재배포되거나 일정 시간 미사용으로 잠들었다 깨어날 때마다 파일이 초기화되어 데이터가 사라지는 문제가 있었습니다. Neon으로 옮기면서 이 문제가 해결되었습니다 — 서버가 재시작되어도 데이터는 그대로 남아 있습니다. (`data/` 폴더의 기존 파일들은 더 이상 사용되지 않으며, 참고용으로만 남아 있습니다.)
 
 ## 5. 폴더 구조
 
 ```
 transport-app/
 ├── server.js          # Express 서버, API, 로그인/세션, 지오코딩 프록시
+├── db.js              # PostgreSQL(Neon) 연결 및 거래처/배차 데이터 CRUD
 ├── package.json
 ├── .env.example
 ├── .gitignore
-├── data/
-│   └── clients.json   # 거래처 데이터 (샘플 2건 포함)
+├── data/              # (더 이상 사용되지 않음 — 예전 파일 저장 방식의 흔적)
 └── public/
     ├── login.html      # 로그인 화면
     ├── index.html      # 메인 화면 (로그인 필요)
@@ -131,6 +148,7 @@ transport-app/
 
 ## 6. 보안 체크리스트 (배포 전 꼭 확인)
 
+- [ ] `DATABASE_URL`에 Neon 연결 문자열을 정확히 넣었는지
 - [ ] `ADMIN_PASSWORD`, `VIEWER_PASSWORD`를 기본값이 아닌 강력한 비밀번호로 바꿨는지
 - [ ] `SESSION_SECRET`을 랜덤 값으로 생성해 넣었는지
 - [ ] 배포 환경에 `NODE_ENV=production`을 설정했는지
