@@ -15,6 +15,15 @@ let schedulePolyline = null;
 // 다음 거래처까지 예상 이동시간 계산에 사용하는 평균 주행 속도(도심/근거리 배송 기준 대략적인 값)
 const AVG_SPEED_KMH = 30;
 
+// 달력 탭 상태 (지도 없이 날짜별 배차 목록만 보는 화면)
+let calendarMonth = todayDateString().slice(0, 7); // 'YYYY-MM'
+let calendarSelectedDate = todayDateString();
+let calendarClientIds = [];
+let calendarCompletedMap = new Map();
+let calendarNoteMap = new Map();
+let calendarCounts = {}; // { 'YYYY-MM-DD': 건수 }
+let calDragIndex = null;
+
 const el = id => document.getElementById(id);
 
 function todayDateString() {
@@ -46,6 +55,7 @@ function applyRoleUI() {
   el('addBtn').classList.toggle('hidden', !isAdmin);
   el('scheduleAddBox').classList.toggle('hidden', !isAdmin);
   el('scheduleAdminActions').classList.toggle('hidden', !isAdmin);
+  el('calAddBox').classList.toggle('hidden', !isAdmin);
 
   const badge = el('roleBadge');
   if (badge) {
@@ -204,14 +214,22 @@ function switchTab(tab) {
   activeTab = tab;
   el('tabClients').classList.toggle('active', tab === 'clients');
   el('tabSchedule').classList.toggle('active', tab === 'schedule');
+  el('tabCalendar').classList.toggle('active', tab === 'calendar');
   el('clientsView').classList.toggle('hidden', tab !== 'clients');
   el('scheduleView').classList.toggle('hidden', tab !== 'schedule');
+  el('calendarView').classList.toggle('hidden', tab !== 'calendar');
+
+  // 달력 탭은 지도 없이 목록만 보여줍니다.
+  el('layout').classList.toggle('no-map', tab === 'calendar');
 
   if (tab === 'clients') {
     renderMarkers();
-  } else {
+  } else if (tab === 'schedule') {
     el('scheduleDate').value = scheduleDate;
     loadSchedule(scheduleDate);
+  } else if (tab === 'calendar') {
+    loadCalendarMonth(calendarMonth);
+    selectCalendarDate(calendarSelectedDate);
   }
 }
 
@@ -509,6 +527,239 @@ function dateStringFrom(d) {
   return `${y}-${m}-${day}`;
 }
 
+// ---------- 달력 탭 (지도 없이 날짜별 배차 목록) ----------
+function shiftMonth(monthStr, delta) {
+  const [y, m] = monthStr.split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function formatDateLabel(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = ['일', '월', '화', '수', '목', '금', '토'][d.getDay()];
+  return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${dow})`;
+}
+
+async function loadCalendarMonth(month) {
+  try {
+    const data = await fetchJSON(`/api/schedule/month?month=${encodeURIComponent(month)}`);
+    calendarCounts = data.counts || {};
+  } catch (err) {
+    calendarCounts = {};
+    showToast(err.message);
+  }
+  renderCalendarGrid();
+}
+
+function renderCalendarGrid() {
+  const grid = el('calGrid');
+  grid.innerHTML = '';
+
+  const [year, month] = calendarMonth.split('-').map(Number);
+  el('calMonthLabel').textContent = `${year}년 ${month}월`;
+
+  ['일', '월', '화', '수', '목', '금', '토'].forEach(name => {
+    const cell = document.createElement('div');
+    cell.className = 'cal-dow';
+    cell.textContent = name;
+    grid.appendChild(cell);
+  });
+
+  const firstDay = new Date(year, month - 1, 1);
+  const startWeekday = firstDay.getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const today = todayDateString();
+
+  for (let i = 0; i < startWeekday; i++) {
+    const empty = document.createElement('div');
+    empty.className = 'cal-cell empty';
+    grid.appendChild(empty);
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const cell = document.createElement('div');
+    cell.className = 'cal-cell';
+    if (dateStr === today) cell.classList.add('today');
+    if (dateStr === calendarSelectedDate) cell.classList.add('selected');
+
+    const count = calendarCounts[dateStr] || 0;
+    cell.innerHTML = `
+      <div class="cal-date-num">${day}</div>
+      ${count > 0 ? `<div class="cal-count-badge">${count}건</div>` : ''}
+    `;
+    cell.addEventListener('click', () => selectCalendarDate(dateStr));
+    grid.appendChild(cell);
+  }
+}
+
+async function selectCalendarDate(dateStr) {
+  calendarSelectedDate = dateStr;
+  renderCalendarGrid();
+  el('calSelectedLabel').textContent = formatDateLabel(dateStr);
+
+  try {
+    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(dateStr)}`);
+    calendarClientIds = data.clientIds;
+    calendarCompletedMap = new Map(data.clients.map(c => [c.id, c.completedAt]));
+    calendarNoteMap = new Map(data.clients.map(c => [c.id, c.note || '']));
+  } catch (err) {
+    calendarClientIds = [];
+    calendarCompletedMap = new Map();
+    calendarNoteMap = new Map();
+    showToast(err.message);
+  }
+
+  renderCalendarScheduleList();
+}
+
+function populateCalendarAddSelect() {
+  const select = el('calAddSelect');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">거래처 선택해서 추가...</option>';
+  clients
+    .filter(c => !calendarClientIds.includes(c.id))
+    .forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = `${c.name} (${c.address})`;
+      select.appendChild(opt);
+    });
+  select.value = current && !calendarClientIds.includes(current) ? current : '';
+}
+
+function renderCalendarScheduleList() {
+  const isAdmin = currentRole === 'admin';
+  const list = el('calScheduleList');
+  list.innerHTML = '';
+
+  el('calAddBox').classList.toggle('hidden', !isAdmin);
+
+  const scheduleClients = calendarClientIds
+    .map(id => clients.find(c => c.id === id))
+    .filter(Boolean);
+
+  if (scheduleClients.length === 0) {
+    list.innerHTML = `<li class="empty-state">${calendarSelectedDate}에 등록된 배차가 없습니다.${isAdmin ? ' 아래에서 거래처를 선택해 추가해주세요.' : ''}</li>`;
+    populateCalendarAddSelect();
+    return;
+  }
+
+  scheduleClients.forEach((client, index) => {
+    const completedAt = calendarCompletedMap.get(client.id) || null;
+    const isDone = !!completedAt;
+    const note = calendarNoteMap.get(client.id) || '';
+
+    const li = document.createElement('li');
+    li.className = 'schedule-item cal-item' + (isDone ? ' done' : '');
+    li.dataset.index = String(index);
+
+    li.innerHTML = `
+      ${isAdmin ? '<div class="drag-handle" title="드래그해서 순서 변경">⠿</div>' : ''}
+      <div class="schedule-order-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</div>
+      <div class="schedule-item-info">
+        <div class="name">${escapeHtml(client.name)}</div>
+        <div class="addr">${escapeHtml(client.address)}</div>
+        <div class="cal-note-wrap"></div>
+      </div>
+    `;
+
+    const noteWrap = li.querySelector('.cal-note-wrap');
+    if (isAdmin) {
+      const noteInput = document.createElement('input');
+      noteInput.type = 'text';
+      noteInput.className = 'cal-note-input';
+      noteInput.placeholder = '납품 수량 메모 (예: 20박스)';
+      noteInput.value = note;
+      noteInput.maxLength = 200;
+      noteInput.addEventListener('blur', () => saveCalendarNote(client.id, noteInput.value));
+      noteWrap.appendChild(noteInput);
+    } else if (note) {
+      const noteText = document.createElement('div');
+      noteText.className = 'cal-note-text';
+      noteText.textContent = `📦 ${note}`;
+      noteWrap.appendChild(noteText);
+    }
+
+    if (isAdmin) {
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'cal-remove-btn';
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', () => removeCalendarItem(index));
+      li.appendChild(removeBtn);
+
+      li.draggable = true;
+      li.addEventListener('dragstart', (e) => {
+        calDragIndex = index;
+        e.dataTransfer.effectAllowed = 'move';
+        li.classList.add('dragging');
+      });
+      li.addEventListener('dragend', () => {
+        li.classList.remove('dragging');
+        list.querySelectorAll('.cal-item').forEach(item => item.classList.remove('drag-over'));
+      });
+      li.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        li.classList.add('drag-over');
+      });
+      li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+      li.addEventListener('drop', (e) => {
+        e.preventDefault();
+        li.classList.remove('drag-over');
+        const targetIndex = Number(li.dataset.index);
+        if (calDragIndex === null || calDragIndex === targetIndex) return;
+        const [moved] = calendarClientIds.splice(calDragIndex, 1);
+        calendarClientIds.splice(targetIndex, 0, moved);
+        calDragIndex = null;
+        renderCalendarScheduleList();
+        saveCalendarOrder();
+      });
+    }
+
+    list.appendChild(li);
+  });
+
+  populateCalendarAddSelect();
+}
+
+async function saveCalendarOrder() {
+  try {
+    await fetchJSON(`/api/schedule?date=${encodeURIComponent(calendarSelectedDate)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientIds: calendarClientIds })
+    });
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+async function removeCalendarItem(index) {
+  calendarClientIds.splice(index, 1);
+  await saveCalendarOrder();
+  await loadCalendarMonth(calendarMonth);
+  await selectCalendarDate(calendarSelectedDate);
+  showToast('배차 목록에서 제외했습니다.');
+}
+
+async function saveCalendarNote(clientId, note) {
+  const trimmed = note.trim();
+  if ((calendarNoteMap.get(clientId) || '') === trimmed) return;
+  try {
+    await fetchJSON(`/api/schedule/note?date=${encodeURIComponent(calendarSelectedDate)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId, note: trimmed })
+    });
+    calendarNoteMap.set(clientId, trimmed);
+    showToast('메모를 저장했습니다.');
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
 // ---------- 모달 ----------
 const FORM_FIELD_IDS = ['fName', 'fAddress', 'fManager', 'fPhone', 'fMemo'];
 
@@ -610,6 +861,7 @@ function bindEvents() {
   // ---------- 배차 일정 이벤트 ----------
   el('tabClients').addEventListener('click', () => switchTab('clients'));
   el('tabSchedule').addEventListener('click', () => switchTab('schedule'));
+  el('tabCalendar').addEventListener('click', () => switchTab('calendar'));
 
   el('scheduleStartBtn').addEventListener('click', async () => {
     try {
@@ -663,6 +915,29 @@ function bindEvents() {
     } catch (err) {
       showToast(err.message);
     }
+  });
+
+  // ---------- 달력 탭 이벤트 ----------
+  el('calPrevMonth').addEventListener('click', () => {
+    calendarMonth = shiftMonth(calendarMonth, -1);
+    loadCalendarMonth(calendarMonth);
+  });
+
+  el('calNextMonth').addEventListener('click', () => {
+    calendarMonth = shiftMonth(calendarMonth, 1);
+    loadCalendarMonth(calendarMonth);
+  });
+
+  el('calAddBtn').addEventListener('click', async () => {
+    const select = el('calAddSelect');
+    const id = select.value;
+    if (!id) return;
+    calendarClientIds.push(id);
+    select.value = '';
+    await saveCalendarOrder();
+    await loadCalendarMonth(calendarMonth);
+    await selectCalendarDate(calendarSelectedDate);
+    showToast('배차 목록에 추가했습니다.');
   });
 }
 
