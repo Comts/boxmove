@@ -16,13 +16,14 @@
   </div>
 </header>
 
-<main class="layout">
+<main class="layout" id="layout">
   <section id="map" class="map"></section>
 
   <section class="list-panel">
     <div class="tab-switcher">
       <button id="tabClients" class="tab-btn">전체 거래처</button>
       <button id="tabSchedule" class="tab-btn">오늘의 배차</button>
+      <button id="tabCalendar" class="tab-btn">달력</button>
     </div>
 
     <div id="clientsView">
@@ -56,6 +57,29 @@
       <div id="scheduleAdminActions" class="schedule-admin-actions hidden">
         <button id="scheduleSaveBtn" class="btn primary" type="button">순서 저장</button>
       </div>
+    </div>
+
+    <div id="calendarView" class="hidden">
+      <div class="cal-month-nav">
+        <button id="calPrevMonth" class="btn" type="button">‹</button>
+        <div id="calMonthLabel" class="cal-month-label"></div>
+        <button id="calNextMonth" class="btn" type="button">›</button>
+      </div>
+
+      <div id="calGrid" class="cal-grid"></div>
+
+      <div class="cal-selected-header">
+        <div id="calSelectedLabel" class="cal-selected-label"></div>
+      </div>
+
+      <div id="calAddBox" class="schedule-add-box hidden">
+        <select id="calAddSelect">
+          <option value="">거래처 선택해서 추가...</option>
+        </select>
+        <button id="calAddBtn" class="btn" type="button">+ 추가</button>
+      </div>
+
+      <ol id="calScheduleList" class="schedule-list cal-schedule-list"></ol>
     </div>
   </section>
 </main>
