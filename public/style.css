@@ -209,6 +209,32 @@ html, body {
   border-left: none;
 }
 
+/* 차량 선택 */
+.vehicle-switcher {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.vehicle-btn {
+  flex: 1;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  background: white;
+  font-size: 13px;
+  font-weight: 600;
+  color: #666;
+  cursor: pointer;
+}
+
+.vehicle-btn.active {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: white;
+}
+
 /* 배차 일정 */
 .schedule-date-box {
   display: flex;
@@ -420,14 +446,21 @@ html, body {
 }
 
 .cal-grid {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   padding: 8px;
-  border-bottom: 1px solid #eee;
+  overflow-y: auto;
+}
+
+.cal-dow-row,
+.cal-week-row {
+  display: flex;
+  gap: 2px;
 }
 
 .cal-dow {
+  flex: 1 1 0;
   text-align: center;
   font-size: 11px;
   color: #999;
@@ -436,9 +469,12 @@ html, body {
 }
 
 .cal-cell {
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 44px;
   border-radius: 8px;
   padding: 4px;
+  margin-bottom: 2px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -491,15 +527,16 @@ html, body {
   color: white;
 }
 
-/* 주간 스트립 (선택한 날짜가 속한 일~토 7일을 나란히 표시) */
+/* 주간 스트립 (선택한 주(週) 행 바로 아래에 펼쳐져서 일~토 7일을 나란히 표시) */
 .cal-week-strip {
-  flex: 1;
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  padding: 10px 12px;
+  margin: 4px 0 10px;
+  padding: 10px 8px;
+  background: #f7f9fc;
+  border-radius: 10px;
   overflow-x: auto;
-  overflow-y: auto;
 }
 
 .cal-day-col {
@@ -594,6 +631,11 @@ html, body {
 
 .cal-day-item.drag-over {
   border-top: 2px solid #1f6feb;
+}
+
+.cal-day-list.drag-over-list {
+  background: #eef5ff;
+  border-radius: 8px;
 }
 
 .cal-day-item-top {
