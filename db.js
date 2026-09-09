@@ -45,9 +45,13 @@ async function initDb() {
       client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
       position INT NOT NULL,
       completed_at TIMESTAMPTZ,
+      note TEXT DEFAULT '',
       PRIMARY KEY (date, client_id)
     );
   `);
+
+  // 기존에 이미 만들어진 테이블에는 note 컬럼이 없을 수 있으므로 추가 보정
+  await pool.query(`ALTER TABLE schedule_items ADD COLUMN IF NOT EXISTS note TEXT DEFAULT '';`);
 }
 
 function rowToClient(row) {
@@ -108,7 +112,7 @@ async function getScheduleForDate(date) {
 
   // 순서(position) 기준으로 정렬해서 가져오고, 삭제된 거래처는 자동으로 조인에서 제외됨(INNER JOIN)
   const itemsResult = await pool.query(
-    `SELECT c.*, si.completed_at
+    `SELECT c.*, si.completed_at, si.note
      FROM schedule_items si
      JOIN clients c ON c.id = si.client_id
      WHERE si.date = $1
@@ -118,7 +122,8 @@ async function getScheduleForDate(date) {
 
   const clients = itemsResult.rows.map(row => ({
     ...rowToClient(row),
-    completedAt: row.completed_at
+    completedAt: row.completed_at,
+    note: row.note || ''
   }));
 
   return { startedAt, clients };
@@ -136,12 +141,13 @@ async function setScheduleItems(date, clientIds) {
       [date]
     );
 
-    // 기존에 체크된 완료 시각은 유지해야 하므로 미리 조회
+    // 기존에 체크된 완료 시각/메모는 유지해야 하므로 미리 조회
     const existing = await client.query(
-      'SELECT client_id, completed_at FROM schedule_items WHERE date = $1',
+      'SELECT client_id, completed_at, note FROM schedule_items WHERE date = $1',
       [date]
     );
     const previousCompletedAt = new Map(existing.rows.map(r => [r.client_id, r.completed_at]));
+    const previousNote = new Map(existing.rows.map(r => [r.client_id, r.note]));
 
     await client.query('DELETE FROM schedule_items WHERE date = $1', [date]);
 
@@ -152,9 +158,9 @@ async function setScheduleItems(date, clientIds) {
       for (let i = 0; i < clientIds.length; i++) {
         const clientId = clientIds[i];
         await client.query(
-          `INSERT INTO schedule_items (date, client_id, position, completed_at)
-           VALUES ($1, $2, $3, $4)`,
-          [date, clientId, i, previousCompletedAt.get(clientId) || null]
+          `INSERT INTO schedule_items (date, client_id, position, completed_at, note)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [date, clientId, i, previousCompletedAt.get(clientId) || null, previousNote.get(clientId) || '']
         );
       }
     }
@@ -188,6 +194,31 @@ async function setItemCompleted(date, clientId, done) {
   return rowCount > 0 ? completedAt : undefined;
 }
 
+// 그날 배차 항목에 대한 메모(예: 납품 수량)를 저장
+async function setItemNote(date, clientId, note) {
+  const { rowCount } = await pool.query(
+    `UPDATE schedule_items SET note = $3
+     WHERE date = $1 AND client_id = $2`,
+    [date, clientId, note]
+  );
+  return rowCount > 0 ? note : undefined;
+}
+
+// 달력 화면에서 각 날짜에 배차가 몇 건 있는지 표시하기 위한 월별 집계
+// monthPrefix 예: '2026-09' -> 'YYYY-MM-DD'가 이 문자열로 시작하는 날짜들을 집계
+async function getScheduleCountsForMonth(monthPrefix) {
+  const { rows } = await pool.query(
+    `SELECT date, COUNT(*)::int AS cnt
+     FROM schedule_items
+     WHERE date LIKE $1
+     GROUP BY date`,
+    [`${monthPrefix}%`]
+  );
+  const counts = {};
+  rows.forEach(row => { counts[row.date] = row.cnt; });
+  return counts;
+}
+
 module.exports = {
   pool,
   initDb,
@@ -199,5 +230,7 @@ module.exports = {
   getScheduleForDate,
   setScheduleItems,
   startSchedule,
-  setItemCompleted
+  setItemCompleted,
+  setItemNote,
+  getScheduleCountsForMonth
 };
