@@ -3,11 +3,15 @@ let markers = [];
 let clients = [];
 let editingId = null;
 let currentRole = null; // 'admin' | 'viewer'
-let activeTab = 'clients'; // 'clients' | 'schedule'
+let activeTab = 'clients'; // 'clients' | 'schedule' | 'calendar'
 
-// 배차 일정 상태
+// 차량 선택 (차량별로 배차가 완전히 분리됩니다)
+const VEHICLES = ['3.5t', '5t'];
+let selectedVehicle = localStorage.getItem('selectedVehicle') || VEHICLES[0];
+
+// 배차 일정 상태 (같은 거래처가 하루에 여러 번 나올 수 있어 itemId로 각 항목을 구분합니다)
 let scheduleDate = todayDateString();
-let scheduleClientIds = []; // 현재 화면에 표시 중인(아직 저장 안 됐을 수도 있는) 순서
+let scheduleItems = []; // [{ itemId, id(=거래처id), name, address, lat, lng, completedAt, note, ... }]
 let scheduleStartedAt = null; // 오늘 배차를 시작한 시각 (ISO 문자열, 시작 전이면 null)
 let scheduleMarkers = [];
 let schedulePolyline = null;
@@ -19,7 +23,7 @@ const AVG_SPEED_KMH = 30;
 let calendarMonth = todayDateString().slice(0, 7); // 'YYYY-MM'
 let calendarSelectedDate = todayDateString();
 let calendarWeekDates = []; // 선택한 날짜가 속한 주(일~토) 7개 날짜
-let calendarWeekData = new Map(); // date -> { clientIds, completedMap, noteMap }
+let calendarWeekData = new Map(); // date -> { items: [...] }
 let calendarCounts = {}; // { 'YYYY-MM-DD': 건수 }
 let calDragIndex = null;
 let calDragDate = null;
@@ -45,6 +49,7 @@ async function init() {
   bindEvents();
 
   applyRoleUI();
+  applyVehicleUI();
 
   // 기사님 계정은 로그인하면 바로 오늘의 배차 화면부터 보여줍니다.
   switchTab(currentRole === 'viewer' ? 'schedule' : 'clients');
@@ -54,11 +59,31 @@ function applyRoleUI() {
   const isAdmin = currentRole === 'admin';
   el('addBtn').classList.toggle('hidden', !isAdmin);
   el('scheduleAddBox').classList.toggle('hidden', !isAdmin);
-  el('scheduleAdminActions').classList.toggle('hidden', !isAdmin);
 
   const badge = el('roleBadge');
   if (badge) {
     badge.textContent = isAdmin ? '관리자' : '조회 전용';
+  }
+}
+
+// 화면에 있는 모든 차량 선택 버튼(오늘의 배차 탭, 달력 탭 각각)의 활성 표시를 동기화
+function applyVehicleUI() {
+  document.querySelectorAll('.vehicle-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.vehicle === selectedVehicle);
+  });
+}
+
+function setSelectedVehicle(vehicle) {
+  if (vehicle === selectedVehicle) return;
+  selectedVehicle = vehicle;
+  localStorage.setItem('selectedVehicle', vehicle);
+  applyVehicleUI();
+
+  if (activeTab === 'schedule') {
+    loadSchedule(scheduleDate);
+  } else if (activeTab === 'calendar') {
+    loadCalendarMonth(calendarMonth);
+    selectCalendarDate(calendarSelectedDate);
   }
 }
 
@@ -232,15 +257,12 @@ function switchTab(tab) {
   }
 }
 
-// ---------- 배차 일정 ----------
-let scheduleCompletedMap = new Map(); // clientId -> 완료 시각(ISO) | null
-
+// ---------- 배차 일정 (오늘의 배차 탭) ----------
 async function loadSchedule(date) {
   try {
-    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}`);
-    scheduleClientIds = data.clientIds;
+    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(selectedVehicle)}`);
+    scheduleItems = data.items;
     scheduleStartedAt = data.startedAt;
-    scheduleCompletedMap = new Map(data.clients.map(c => [c.id, c.completedAt]));
     renderScheduleList();
     renderScheduleMap();
   } catch (err) {
@@ -263,17 +285,18 @@ function formatTime(isoOrDate) {
   return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-// 각 거래처의 (예상/실제) 도착시각과, 다음 거래처까지의 대략적인 거리·이동시간을 계산합니다.
+// 각 항목의 (예상/실제) 도착시각과, 다음 항목까지의 대략적인 거리·이동시간을 계산합니다.
 // 완료 체크가 된 곳은 실제 완료 시각을 기준으로, 아직 안 간 곳은 이전 지점으로부터의 직선거리 +
 // 평균 속도(약 30km/h)로 추정한 이동시간을 누적해서 계산합니다. (실시간 교통정보 반영 X, 대략적인 값)
-function computeScheduleTimes(scheduleClients, startedAt) {
+// 같은 거래처(예: 회사)가 여러 번 나와도 각 항목을 그대로 순서대로 계산하므로 왕복 경로도 정상 동작합니다.
+function computeScheduleTimes(items, startedAt) {
   const etas = [];
-  const segments = []; // segments[i] = i번째와 i+1번째 거래처 사이 구간 정보
+  const segments = []; // segments[i] = i번째와 i+1번째 항목 사이 구간 정보
 
   let runningTime = startedAt ? new Date(startedAt) : null;
 
-  scheduleClients.forEach((client, idx) => {
-    const completedAt = scheduleCompletedMap.get(client.id) || null;
+  items.forEach((item, idx) => {
+    const completedAt = item.completedAt || null;
     let eta = null;
 
     if (completedAt) {
@@ -285,10 +308,10 @@ function computeScheduleTimes(scheduleClients, startedAt) {
 
     etas.push({ time: eta, completed: !!completedAt });
 
-    if (idx < scheduleClients.length - 1) {
-      const next = scheduleClients[idx + 1];
-      if (client.lat != null && client.lng != null && next.lat != null && next.lng != null) {
-        const km = haversineKm(client.lat, client.lng, next.lat, next.lng);
+    if (idx < items.length - 1) {
+      const next = items[idx + 1];
+      if (item.lat != null && item.lng != null && next.lat != null && next.lng != null) {
+        const km = haversineKm(item.lat, item.lng, next.lat, next.lng);
         const min = Math.max(1, Math.round((km / AVG_SPEED_KMH) * 60));
         segments.push({ km, min });
         if (runningTime) runningTime = new Date(runningTime.getTime() + min * 60000);
@@ -301,20 +324,19 @@ function computeScheduleTimes(scheduleClients, startedAt) {
   return { etas, segments };
 }
 
+// 같은 거래처를 하루에 여러 번 추가할 수 있으므로(예: 회사 왕복), 이미 추가된 곳도 목록에서 빠지지 않습니다.
 function populateScheduleAddSelect() {
   const select = el('scheduleAddSelect');
   if (!select) return;
   const current = select.value;
   select.innerHTML = '<option value="">거래처 선택해서 추가...</option>';
-  clients
-    .filter(c => !scheduleClientIds.includes(c.id))
-    .forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.id;
-      opt.textContent = `${c.name} (${c.address})`;
-      select.appendChild(opt);
-    });
-  select.value = current && !scheduleClientIds.includes(current) ? current : '';
+  clients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = `${c.name} (${c.address})`;
+    select.appendChild(opt);
+  });
+  select.value = current || '';
 }
 
 function renderScheduleList() {
@@ -322,12 +344,8 @@ function renderScheduleList() {
   const list = el('scheduleList');
   list.innerHTML = '';
 
-  const scheduleClients = scheduleClientIds
-    .map(id => clients.find(c => c.id === id))
-    .filter(Boolean);
-
   // 시작 버튼/시작 안내 문구 표시
-  el('scheduleStartBox').classList.toggle('hidden', !!scheduleStartedAt || scheduleClients.length === 0);
+  el('scheduleStartBox').classList.toggle('hidden', !!scheduleStartedAt || scheduleItems.length === 0);
   const startedInfo = el('scheduleStartedInfo');
   if (scheduleStartedAt) {
     startedInfo.textContent = `🚚 ${formatTime(scheduleStartedAt)}에 배차를 시작했습니다`;
@@ -336,15 +354,15 @@ function renderScheduleList() {
     startedInfo.classList.add('hidden');
   }
 
-  if (scheduleClients.length === 0) {
-    list.innerHTML = `<li class="empty-state">${scheduleDate}에 등록된 배차가 없습니다.${isAdmin ? ' 위에서 거래처를 선택해 추가해주세요.' : ''}</li>`;
+  if (scheduleItems.length === 0) {
+    list.innerHTML = `<li class="empty-state">${scheduleDate} · ${selectedVehicle}에 등록된 배차가 없습니다.${isAdmin ? ' 위에서 거래처를 선택해 추가해주세요.' : ''}</li>`;
     populateScheduleAddSelect();
     return;
   }
 
-  const { etas, segments } = computeScheduleTimes(scheduleClients, scheduleStartedAt);
+  const { etas, segments } = computeScheduleTimes(scheduleItems, scheduleStartedAt);
 
-  scheduleClients.forEach((client, index) => {
+  scheduleItems.forEach((item, index) => {
     const li = document.createElement('li');
     const eta = etas[index];
     const isDone = eta.completed;
@@ -360,8 +378,8 @@ function renderScheduleList() {
     li.innerHTML = `
       <div class="schedule-order-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</div>
       <div class="schedule-item-info">
-        <div class="name">${escapeHtml(client.name)}</div>
-        <div class="addr">${escapeHtml(client.address)}</div>
+        <div class="name">${escapeHtml(item.name)}</div>
+        <div class="addr">${escapeHtml(item.address)}</div>
         ${etaHtml}
       </div>
     `;
@@ -373,7 +391,11 @@ function renderScheduleList() {
     completeBtn.type = 'button';
     completeBtn.className = 'complete-btn' + (isDone ? ' done' : '');
     completeBtn.textContent = isDone ? '완료 취소' : '완료';
-    completeBtn.addEventListener('click', () => toggleScheduleComplete(client.id, !isDone));
+    if (item.itemId) {
+      completeBtn.addEventListener('click', () => toggleScheduleComplete(item.itemId, !isDone));
+    } else {
+      completeBtn.disabled = true; // 방금 추가되어 아직 저장 중인 항목
+    }
     actions.appendChild(completeBtn);
 
     if (isAdmin) {
@@ -386,7 +408,7 @@ function renderScheduleList() {
       const downBtn = document.createElement('button');
       downBtn.type = 'button';
       downBtn.textContent = '↓';
-      downBtn.disabled = index === scheduleClients.length - 1;
+      downBtn.disabled = index === scheduleItems.length - 1;
       downBtn.addEventListener('click', () => moveScheduleItem(index, 1));
 
       const removeBtn = document.createElement('button');
@@ -404,18 +426,18 @@ function renderScheduleList() {
 
     li.addEventListener('click', (e) => {
       if (e.target.closest('button')) return; // 버튼 클릭은 지도 이동과 분리
-      focusClient(client);
+      focusClient(item);
     });
     li.style.cursor = 'pointer';
 
     list.appendChild(li);
 
-    // 다음 거래처까지 대략적인 거리/시간 안내 (마지막 항목 뒤에는 표시 안 함)
+    // 다음 항목까지 대략적인 거리/시간 안내 (마지막 항목 뒤에는 표시 안 함)
     const segment = segments[index];
     if (segment) {
       const segLi = document.createElement('li');
       segLi.className = 'schedule-segment';
-      segLi.textContent = `🚗 다음 거래처까지 약 ${segment.km.toFixed(1)}km · 약 ${segment.min}분`;
+      segLi.textContent = `🚗 다음 항목까지 약 ${segment.km.toFixed(1)}km · 약 ${segment.min}분`;
       list.appendChild(segLi);
     }
   });
@@ -423,12 +445,12 @@ function renderScheduleList() {
   populateScheduleAddSelect();
 }
 
-async function toggleScheduleComplete(clientId, done) {
+async function toggleScheduleComplete(itemId, done) {
   try {
-    await fetchJSON(`/api/schedule/complete?date=${encodeURIComponent(scheduleDate)}`, {
+    await fetchJSON('/api/schedule/complete', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId, done })
+      body: JSON.stringify({ itemId, done })
     });
     await loadSchedule(scheduleDate);
     if (done) showToast('납품 완료로 체크했습니다.');
@@ -439,17 +461,36 @@ async function toggleScheduleComplete(clientId, done) {
 
 function moveScheduleItem(index, delta) {
   const target = index + delta;
-  if (target < 0 || target >= scheduleClientIds.length) return;
-  const arr = scheduleClientIds;
+  if (target < 0 || target >= scheduleItems.length) return;
+  const arr = scheduleItems;
   [arr[index], arr[target]] = [arr[target], arr[index]];
   renderScheduleList();
   renderScheduleMap();
+  saveScheduleOrder();
 }
 
 function removeScheduleItem(index) {
-  scheduleClientIds.splice(index, 1);
+  scheduleItems.splice(index, 1);
   renderScheduleList();
   renderScheduleMap();
+  saveScheduleOrder();
+}
+
+// 순서 변경/추가/삭제 시 자동으로 저장합니다 (별도의 "저장" 버튼이 필요 없습니다).
+async function saveScheduleOrder() {
+  try {
+    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(scheduleDate)}&vehicle=${encodeURIComponent(selectedVehicle)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: scheduleItems.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })) })
+    });
+    scheduleItems = data.items;
+    scheduleStartedAt = data.startedAt;
+    renderScheduleList();
+    renderScheduleMap();
+  } catch (err) {
+    showToast(err.message);
+  }
 }
 
 function clearScheduleMap() {
@@ -466,24 +507,21 @@ function renderScheduleMap() {
   clearMarkers();
   clearScheduleMap();
 
-  const scheduleClients = scheduleClientIds
-    .map(id => clients.find(c => c.id === id))
-    .filter(c => c && c.lat != null && c.lng != null);
-
-  if (scheduleClients.length === 0) return;
+  const pts = scheduleItems.filter(it => it.lat != null && it.lng != null);
+  if (pts.length === 0) return;
 
   const bounds = new naver.maps.LatLngBounds();
   const path = [];
 
-  scheduleClients.forEach((client, index) => {
-    const position = new naver.maps.LatLng(client.lat, client.lng);
+  pts.forEach((item, index) => {
+    const position = new naver.maps.LatLng(item.lat, item.lng);
     path.push(position);
     bounds.extend(position);
 
     const marker = new naver.maps.Marker({
       position,
       map,
-      title: client.name,
+      title: item.name,
       icon: {
         content: `<div style="background:#1f6feb;color:#fff;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);">${index + 1}</div>`,
         anchor: new naver.maps.Point(14, 14)
@@ -492,10 +530,10 @@ function renderScheduleMap() {
 
     const infoWindow = new naver.maps.InfoWindow({
       content: `<div style="padding:10px 12px; font-size:13px; line-height:1.5;">
-        <strong>${index + 1}. ${escapeHtml(client.name)}</strong><br/>
-        ${escapeHtml(client.address)}<br/>
-        ${client.manager ? '담당자: ' + escapeHtml(client.manager) + '<br/>' : ''}
-        ${client.phone ? '연락처: ' + escapeHtml(client.phone) : ''}
+        <strong>${index + 1}. ${escapeHtml(item.name)}</strong><br/>
+        ${escapeHtml(item.address)}<br/>
+        ${item.manager ? '담당자: ' + escapeHtml(item.manager) + '<br/>' : ''}
+        ${item.phone ? '연락처: ' + escapeHtml(item.phone) : ''}
       </div>`
     });
 
@@ -533,15 +571,9 @@ function shiftMonth(monthStr, delta) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function formatDateLabel(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  const dow = ['일', '월', '화', '수', '목', '금', '토'][d.getDay()];
-  return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 (${dow})`;
-}
-
 async function loadCalendarMonth(month) {
   try {
-    const data = await fetchJSON(`/api/schedule/month?month=${encodeURIComponent(month)}`);
+    const data = await fetchJSON(`/api/schedule/month?month=${encodeURIComponent(month)}&vehicle=${encodeURIComponent(selectedVehicle)}`);
     calendarCounts = data.counts || {};
   } catch (err) {
     calendarCounts = {};
@@ -550,6 +582,26 @@ async function loadCalendarMonth(month) {
   renderCalendarGrid();
 }
 
+// 달력을 일~토 7칸씩 주(週) 단위로 나눕니다. (앞뒤 빈 칸은 null)
+function buildMonthWeeks(year, month) {
+  const firstDay = new Date(year, month - 1, 1);
+  const startWeekday = firstDay.getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
+
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let day = 1; day <= daysInMonth; day++) {
+    cells.push(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const weeks = [];
+  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
+  return weeks;
+}
+
+// 달력 그리드: 선택한 날짜가 속한 주(週)만 그 자리에서 바로 아래로 펼쳐져 배차 내용을 보여주고,
+// 다른 주를 선택하면 그 주는 접히고 새로 선택한 주가 펼쳐집니다.
 function renderCalendarGrid() {
   const grid = el('calGrid');
   grid.innerHTML = '';
@@ -557,40 +609,49 @@ function renderCalendarGrid() {
   const [year, month] = calendarMonth.split('-').map(Number);
   el('calMonthLabel').textContent = `${year}년 ${month}월`;
 
+  const dowRow = document.createElement('div');
+  dowRow.className = 'cal-dow-row';
   ['일', '월', '화', '수', '목', '금', '토'].forEach(name => {
-    const cell = document.createElement('div');
-    cell.className = 'cal-dow';
-    cell.textContent = name;
-    grid.appendChild(cell);
+    const dow = document.createElement('div');
+    dow.className = 'cal-dow';
+    dow.textContent = name;
+    dowRow.appendChild(dow);
   });
+  grid.appendChild(dowRow);
 
-  const firstDay = new Date(year, month - 1, 1);
-  const startWeekday = firstDay.getDay();
-  const daysInMonth = new Date(year, month, 0).getDate();
+  const weeks = buildMonthWeeks(year, month);
   const today = todayDateString();
 
-  for (let i = 0; i < startWeekday; i++) {
-    const empty = document.createElement('div');
-    empty.className = 'cal-cell empty';
-    grid.appendChild(empty);
-  }
+  weeks.forEach(week => {
+    const weekRow = document.createElement('div');
+    weekRow.className = 'cal-week-row';
 
-  for (let day = 1; day <= daysInMonth; day++) {
-    const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const cell = document.createElement('div');
-    cell.className = 'cal-cell';
-    if (dateStr === today) cell.classList.add('today');
-    if (calendarWeekDates.includes(dateStr)) cell.classList.add('in-week');
-    if (dateStr === calendarSelectedDate) cell.classList.add('selected');
+    week.forEach(dateStr => {
+      const cell = document.createElement('div');
+      cell.className = 'cal-cell' + (!dateStr ? ' empty' : '');
 
-    const count = calendarCounts[dateStr] || 0;
-    cell.innerHTML = `
-      <div class="cal-date-num">${day}</div>
-      ${count > 0 ? `<div class="cal-count-badge">${count}건</div>` : ''}
-    `;
-    cell.addEventListener('click', () => selectCalendarDate(dateStr));
-    grid.appendChild(cell);
-  }
+      if (dateStr) {
+        if (dateStr === today) cell.classList.add('today');
+        if (dateStr === calendarSelectedDate) cell.classList.add('selected');
+
+        const count = calendarCounts[dateStr] || 0;
+        cell.innerHTML = `
+          <div class="cal-date-num">${Number(dateStr.split('-')[2])}</div>
+          ${count > 0 ? `<div class="cal-count-badge">${count}건</div>` : ''}
+        `;
+        cell.addEventListener('click', () => selectCalendarDate(dateStr));
+      }
+
+      weekRow.appendChild(cell);
+    });
+
+    grid.appendChild(weekRow);
+
+    // 선택한 날짜가 이 주(週)에 있으면, 이 행 바로 아래에 그 주의 배차 내용을 펼쳐서 보여줍니다.
+    if (week.includes(calendarSelectedDate)) {
+      grid.appendChild(buildWeekStripNode());
+    }
+  });
 }
 
 // 특정 날짜가 속한 주(일요일~토요일) 7개 날짜를 구합니다.
@@ -610,14 +671,10 @@ function getWeekDates(dateStr) {
 
 async function fetchDaySchedule(date) {
   try {
-    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}`);
-    return {
-      clientIds: data.clientIds,
-      completedMap: new Map(data.clients.map(c => [c.id, c.completedAt])),
-      noteMap: new Map(data.clients.map(c => [c.id, c.note || '']))
-    };
+    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(selectedVehicle)}`);
+    return { items: data.items };
   } catch (err) {
-    return { clientIds: [], completedMap: new Map(), noteMap: new Map() };
+    return { items: [] };
   }
 }
 
@@ -631,14 +688,15 @@ async function selectCalendarDate(dateStr) {
 async function loadCalendarWeek() {
   const results = await Promise.all(calendarWeekDates.map(fetchDaySchedule));
   calendarWeekData = new Map(calendarWeekDates.map((d, i) => [d, results[i]]));
-  renderCalendarWeekStrip();
+  renderCalendarGrid();
 }
 
-// 선택한 날짜가 속한 주(일~토)를 한 줄에 나란히 보여줍니다.
+// 선택한 날짜가 속한 주(일~토)를 한 줄에 나란히 보여주는 영역을 만듭니다.
 // 실제 납품을 가지 않는 토/일요일은 좁게, 월~금은 넓게 표시합니다.
-function renderCalendarWeekStrip() {
-  const strip = el('calWeekStrip');
-  strip.innerHTML = '';
+// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜의 칸으로 드래그해서 옮기는 것도 가능합니다.
+function buildWeekStripNode() {
+  const strip = document.createElement('div');
+  strip.className = 'cal-week-strip';
 
   const isAdmin = currentRole === 'admin';
   const today = todayDateString();
@@ -646,7 +704,7 @@ function renderCalendarWeekStrip() {
 
   calendarWeekDates.forEach((dateStr, dowIndex) => {
     const isWeekend = dowIndex === 0 || dowIndex === 6;
-    const dayData = calendarWeekData.get(dateStr) || { clientIds: [], completedMap: new Map(), noteMap: new Map() };
+    const dayData = calendarWeekData.get(dateStr) || { items: [] };
     const dayNum = Number(dateStr.split('-')[2]);
 
     const col = document.createElement('div');
@@ -663,28 +721,25 @@ function renderCalendarWeekStrip() {
     const listEl = document.createElement('ul');
     listEl.className = 'cal-day-list';
 
-    const dayClients = dayData.clientIds.map(id => clients.find(c => c.id === id)).filter(Boolean);
-
-    if (dayClients.length === 0) {
+    if (dayData.items.length === 0) {
       const empty = document.createElement('li');
       empty.className = 'cal-day-empty';
       empty.textContent = '-';
       listEl.appendChild(empty);
     } else {
-      dayClients.forEach((client, index) => {
-        const completedAt = dayData.completedMap.get(client.id) || null;
-        const isDone = !!completedAt;
-        const note = dayData.noteMap.get(client.id) || '';
+      dayData.items.forEach((item, index) => {
+        const isDone = !!item.completedAt;
+        const note = item.note || '';
 
         const li = document.createElement('li');
         li.className = 'cal-day-item' + (isDone ? ' done' : '');
         li.dataset.index = String(index);
-        li.title = `${client.name} · ${client.address}`;
+        li.title = `${item.name} · ${item.address}`;
 
         li.innerHTML = `
           <div class="cal-day-item-top">
             <span class="cal-day-item-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</span>
-            <span class="cal-day-item-name">${escapeHtml(client.name)}</span>
+            <span class="cal-day-item-name">${escapeHtml(item.name)}</span>
           </div>
         `;
 
@@ -702,9 +757,14 @@ function renderCalendarWeekStrip() {
           noteInput.placeholder = '수량';
           noteInput.value = note;
           noteInput.maxLength = 200;
-          noteInput.addEventListener('blur', () => saveDayNote(dateStr, client.id, noteInput.value));
+          if (item.itemId) {
+            noteInput.addEventListener('blur', () => saveDayNote(dateStr, item.itemId, noteInput.value));
+          } else {
+            noteInput.disabled = true; // 방금 추가/이동되어 아직 저장 중인 항목
+          }
           li.appendChild(noteInput);
 
+          // 드래그로 순서를 바꾸거나(같은 날짜), 다른 날짜 칸으로 옮길 수 있습니다.
           li.draggable = true;
           li.addEventListener('dragstart', (e) => {
             calDragIndex = index;
@@ -714,26 +774,17 @@ function renderCalendarWeekStrip() {
           });
           li.addEventListener('dragend', () => {
             li.classList.remove('dragging');
-            listEl.querySelectorAll('.cal-day-item').forEach(item => item.classList.remove('drag-over'));
+            document.querySelectorAll('.cal-day-item').forEach(el2 => el2.classList.remove('drag-over'));
           });
           li.addEventListener('dragover', (e) => {
-            if (calDragDate !== dateStr) return; // 같은 날짜 안에서만 순서 변경 가능
             e.preventDefault();
             li.classList.add('drag-over');
           });
           li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
           li.addEventListener('drop', (e) => {
-            if (calDragDate !== dateStr) return;
             e.preventDefault();
             li.classList.remove('drag-over');
-            const targetIndex = Number(li.dataset.index);
-            if (calDragIndex === null || calDragIndex === targetIndex) return;
-            const [moved] = dayData.clientIds.splice(calDragIndex, 1);
-            dayData.clientIds.splice(targetIndex, 0, moved);
-            calDragIndex = null;
-            calDragDate = null;
-            renderCalendarWeekStrip();
-            saveDayOrder(dateStr);
+            moveDraggedItem(dateStr, Number(li.dataset.index));
           });
         } else if (note) {
           const noteText = document.createElement('div');
@@ -743,6 +794,20 @@ function renderCalendarWeekStrip() {
         }
 
         listEl.appendChild(li);
+      });
+    }
+
+    // 목록의 빈 공간(항목이 없는 날, 또는 맨 끝)에 놓아도 추가/이동되도록 목록 자체도 드롭 대상으로 둡니다.
+    if (isAdmin) {
+      listEl.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        listEl.classList.add('drag-over-list');
+      });
+      listEl.addEventListener('dragleave', () => listEl.classList.remove('drag-over-list'));
+      listEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        listEl.classList.remove('drag-over-list');
+        moveDraggedItem(dateStr, dayData.items.length);
       });
     }
 
@@ -759,14 +824,13 @@ function renderCalendarWeekStrip() {
       defaultOpt.textContent = '+ 추가';
       select.appendChild(defaultOpt);
 
-      clients
-        .filter(c => !dayData.clientIds.includes(c.id))
-        .forEach(c => {
-          const opt = document.createElement('option');
-          opt.value = c.id;
-          opt.textContent = c.name;
-          select.appendChild(opt);
-        });
+      // 같은 거래처(예: 회사)를 하루에 여러 번 추가할 수 있도록 이미 추가된 곳도 목록에 계속 보여줍니다.
+      clients.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name;
+        select.appendChild(opt);
+      });
 
       select.addEventListener('change', () => {
         const id = select.value;
@@ -780,17 +844,51 @@ function renderCalendarWeekStrip() {
 
     strip.appendChild(col);
   });
+
+  return strip;
+}
+
+// 드래그했던 항목을 targetDate의 targetIndex 위치로 옮깁니다.
+// 같은 날짜 안에서는 순서만 바뀌고, 다른 날짜로 옮기면 완료 상태는 초기화되고(그 날짜엔 아직
+// 안 간 것이므로) 메모는 그대로 유지된 채 새 항목으로 등록됩니다.
+function moveDraggedItem(targetDate, targetIndex) {
+  const sourceDate = calDragDate;
+  const sourceIndex = calDragIndex;
+  calDragDate = null;
+  calDragIndex = null;
+  if (sourceDate == null || sourceIndex == null) return;
+
+  const sourceDayData = calendarWeekData.get(sourceDate);
+  const targetDayData = calendarWeekData.get(targetDate);
+  if (!sourceDayData || !targetDayData) return;
+
+  if (sourceDate === targetDate) {
+    if (sourceIndex === targetIndex) return;
+    const [moved] = sourceDayData.items.splice(sourceIndex, 1);
+    sourceDayData.items.splice(targetIndex, 0, moved);
+    renderCalendarGrid();
+    saveDayOrder(sourceDate);
+  } else {
+    const [moved] = sourceDayData.items.splice(sourceIndex, 1);
+    targetDayData.items.splice(targetIndex, 0, { ...moved, itemId: null, completedAt: null });
+    renderCalendarGrid();
+    saveDayOrder(sourceDate);
+    saveDayOrder(targetDate);
+  }
 }
 
 async function saveDayOrder(date) {
   const dayData = calendarWeekData.get(date);
   if (!dayData) return;
   try {
-    await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}`, {
+    const res = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(selectedVehicle)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientIds: dayData.clientIds })
+      body: JSON.stringify({ items: dayData.items.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })) })
     });
+    dayData.items = res.items; // 실제 itemId/순서를 서버 응답으로 다시 채움
+    renderCalendarGrid();
+    await loadCalendarMonth(calendarMonth);
   } catch (err) {
     showToast(err.message);
   }
@@ -799,37 +897,36 @@ async function saveDayOrder(date) {
 async function removeDayItem(date, index) {
   const dayData = calendarWeekData.get(date);
   if (!dayData) return;
-  dayData.clientIds.splice(index, 1);
-  renderCalendarWeekStrip();
+  dayData.items.splice(index, 1);
+  renderCalendarGrid();
   await saveDayOrder(date);
-  await loadCalendarMonth(calendarMonth);
   showToast('배차 목록에서 제외했습니다.');
 }
 
 async function addDayItem(date, clientId) {
   const dayData = calendarWeekData.get(date);
   if (!dayData) return;
-  dayData.clientIds.push(clientId);
-  dayData.completedMap.set(clientId, null);
-  dayData.noteMap.set(clientId, '');
-  renderCalendarWeekStrip();
+  const clientData = clients.find(c => c.id === clientId);
+  if (!clientData) return;
+  dayData.items.push({ itemId: null, ...clientData, completedAt: null, note: '' });
+  renderCalendarGrid();
   await saveDayOrder(date);
-  await loadCalendarMonth(calendarMonth);
   showToast('배차 목록에 추가했습니다.');
 }
 
-async function saveDayNote(date, clientId, note) {
+async function saveDayNote(date, itemId, note) {
   const dayData = calendarWeekData.get(date);
-  if (!dayData) return;
+  if (!dayData || !itemId) return;
+  const item = dayData.items.find(it => it.itemId === itemId);
   const trimmed = note.trim();
-  if ((dayData.noteMap.get(clientId) || '') === trimmed) return;
+  if (item && (item.note || '') === trimmed) return;
   try {
-    await fetchJSON(`/api/schedule/note?date=${encodeURIComponent(date)}`, {
+    await fetchJSON('/api/schedule/note', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ clientId, note: trimmed })
+      body: JSON.stringify({ itemId, note: trimmed })
     });
-    dayData.noteMap.set(clientId, trimmed);
+    if (item) item.note = trimmed;
     showToast('메모를 저장했습니다.');
   } catch (err) {
     showToast(err.message);
@@ -934,14 +1031,20 @@ function bindEvents() {
     }
   });
 
-  // ---------- 배차 일정 이벤트 ----------
+  // ---------- 탭 이벤트 ----------
   el('tabClients').addEventListener('click', () => switchTab('clients'));
   el('tabSchedule').addEventListener('click', () => switchTab('schedule'));
   el('tabCalendar').addEventListener('click', () => switchTab('calendar'));
 
+  // ---------- 차량 선택 이벤트 (오늘의 배차/달력 탭 공통) ----------
+  document.querySelectorAll('.vehicle-btn').forEach(btn => {
+    btn.addEventListener('click', () => setSelectedVehicle(btn.dataset.vehicle));
+  });
+
+  // ---------- 배차 일정 이벤트 ----------
   el('scheduleStartBtn').addEventListener('click', async () => {
     try {
-      await fetchJSON(`/api/schedule/start?date=${encodeURIComponent(scheduleDate)}`, { method: 'PATCH' });
+      await fetchJSON(`/api/schedule/start?date=${encodeURIComponent(scheduleDate)}&vehicle=${encodeURIComponent(selectedVehicle)}`, { method: 'PATCH' });
       showToast('오늘의 배차를 시작했습니다.');
       await loadSchedule(scheduleDate);
     } catch (err) {
@@ -974,23 +1077,13 @@ function bindEvents() {
     const select = el('scheduleAddSelect');
     const id = select.value;
     if (!id) return;
-    scheduleClientIds.push(id);
+    const clientData = clients.find(c => c.id === id);
+    if (!clientData) return;
+    scheduleItems.push({ itemId: null, ...clientData, completedAt: null, note: '' });
     select.value = '';
     renderScheduleList();
     renderScheduleMap();
-  });
-
-  el('scheduleSaveBtn').addEventListener('click', async () => {
-    try {
-      await fetchJSON(`/api/schedule?date=${encodeURIComponent(scheduleDate)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientIds: scheduleClientIds })
-      });
-      showToast('배차 순서를 저장했습니다.');
-    } catch (err) {
-      showToast(err.message);
-    }
+    saveScheduleOrder();
   });
 
   // ---------- 달력 탭 이벤트 ----------
