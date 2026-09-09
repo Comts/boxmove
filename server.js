@@ -175,11 +175,21 @@ function sanitizeText(value, maxLen) {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_PATTERN = /^\d{4}-\d{2}$/;
 
+// 보유 차량 목록 (2대: 3.5t, 5t). 차량이 늘어나면 이 배열에만 추가하면 됩니다.
+const VEHICLES = ['3.5t', '5t'];
+function isValidVehicle(v) {
+  return typeof v === 'string' && VEHICLES.includes(v);
+}
+
 // ---------- 프론트엔드용 설정(공개 가능한 지도 클라이언트 ID만 전달) ----------
 app.get('/api/config', (req, res) => {
   res.json({
     naverMapsClientId: process.env.NAVER_MAPS_CLIENT_ID || ''
   });
+});
+
+app.get('/api/vehicles', (req, res) => {
+  res.json({ vehicles: VEHICLES });
 });
 
 // ---------- 거래처 CRUD (모두 로그인 필요) ----------
@@ -256,112 +266,120 @@ app.delete('/api/clients/:id', requireAdmin, asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
-// ---------- 배차 일정 (특정 날짜에 어떤 거래처를 어떤 순서로, 언제 갔는지) ----------
+// ---------- 배차 일정 (날짜 + 차량마다 어떤 거래처를 어떤 순서로, 언제 갔는지) ----------
+// 같은 거래처(예: 우리 회사 주소)가 하루에 여러 번 나올 수 있어서, 각 배차 항목은
+// itemId라는 고유 값으로 구분합니다 (거래처 id가 같아도 상관없음).
 app.get('/api/schedule', asyncRoute(async (req, res) => {
   const date = req.query.date;
+  const vehicle = req.query.vehicle;
   if (!date || !DATE_PATTERN.test(date)) {
     return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
   }
+  if (!isValidVehicle(vehicle)) {
+    return res.status(400).json({ error: '차량 종류가 올바르지 않습니다.' });
+  }
 
-  const { startedAt, clients } = await db.getScheduleForDate(date);
+  const { startedAt, items } = await db.getScheduleForDate(date, vehicle);
 
-  res.json({
-    date,
-    startedAt,
-    clientIds: clients.map(c => c.id),
-    clients
-  });
+  res.json({ date, vehicle, startedAt, items });
 }));
 
 app.put('/api/schedule', requireAdmin, asyncRoute(async (req, res) => {
   const date = req.query.date;
+  const vehicle = req.query.vehicle;
   if (!date || !DATE_PATTERN.test(date)) {
     return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
   }
-
-  const clientIds = req.body?.clientIds;
-  if (!Array.isArray(clientIds) || !clientIds.every(id => typeof id === 'string')) {
-    return res.status(400).json({ error: 'clientIds는 문자열 배열이어야 합니다.' });
+  if (!isValidVehicle(vehicle)) {
+    return res.status(400).json({ error: '차량 종류가 올바르지 않습니다.' });
   }
 
-  // 실제 존재하는 거래처 id만 저장 (중복 제거, 순서는 그대로 유지)
+  const rawItems = req.body?.items;
+  if (!Array.isArray(rawItems)) {
+    return res.status(400).json({ error: 'items 배열이 필요합니다.' });
+  }
+
+  // 실제 존재하는 거래처만 허용 (같은 거래처가 여러 번 나오는 것은 허용)
   const allClients = await db.getAllClients();
   const existingIds = new Set(allClients.map(c => c.id));
-  const seen = new Set();
-  const cleanIds = clientIds.filter(id => {
-    if (!existingIds.has(id) || seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
+  const cleanItems = rawItems
+    .filter(it => it && typeof it.clientId === 'string' && existingIds.has(it.clientId))
+    .map(it => ({
+      itemId: typeof it.itemId === 'string' ? it.itemId : null,
+      clientId: it.clientId,
+      // 기존 항목의 메모는 서버에서 항상 그대로 유지되고, 이 값은 새 항목(다른 날짜에서
+      // 옮겨온 경우 등)일 때만 초기 메모로 사용됩니다.
+      note: typeof it.note === 'string' ? sanitizeText(it.note, 200) : ''
+    }));
 
-  await db.setScheduleItems(date, cleanIds);
+  await db.setScheduleItems(date, vehicle, cleanItems);
 
-  res.json({ date, clientIds: cleanIds });
+  const { startedAt, items } = await db.getScheduleForDate(date, vehicle);
+  res.json({ date, vehicle, startedAt, items });
 }));
 
 // 아침에 오늘 배차를 시작할 때 누르는 버튼 (관리자, 기사님 계정 모두 가능)
 app.patch('/api/schedule/start', asyncRoute(async (req, res) => {
   const date = req.query.date;
+  const vehicle = req.query.vehicle;
   if (!date || !DATE_PATTERN.test(date)) {
     return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
   }
+  if (!isValidVehicle(vehicle)) {
+    return res.status(400).json({ error: '차량 종류가 올바르지 않습니다.' });
+  }
 
-  const startedAt = await db.startSchedule(date);
-  res.json({ date, startedAt });
+  const startedAt = await db.startSchedule(date, vehicle);
+  res.json({ date, vehicle, startedAt });
 }));
 
 // 납품 완료 체크 (관리자, 기사님 계정 모두 가능 - 순서 변경 권한과는 별개)
 // 체크할 때마다 완료 시각이 기록되고, 이후 거래처들의 예상 도착시간 계산 기준이 바뀝니다.
+// itemId로 항목을 특정하므로 날짜/차량 파라미터는 필요 없습니다.
 app.patch('/api/schedule/complete', asyncRoute(async (req, res) => {
-  const date = req.query.date;
-  if (!date || !DATE_PATTERN.test(date)) {
-    return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
+  const { itemId, done } = req.body || {};
+  if (typeof itemId !== 'string' || typeof done !== 'boolean') {
+    return res.status(400).json({ error: 'itemId(문자열), done(boolean)이 필요합니다.' });
   }
 
-  const { clientId, done } = req.body || {};
-  if (typeof clientId !== 'string' || typeof done !== 'boolean') {
-    return res.status(400).json({ error: 'clientId(문자열), done(boolean)이 필요합니다.' });
-  }
-
-  const completedAt = await db.setItemCompleted(date, clientId, done);
+  const completedAt = await db.setItemCompleted(itemId, done);
   if (completedAt === undefined) {
-    return res.status(404).json({ error: '해당 날짜의 배차 목록에서 거래처를 찾을 수 없습니다.' });
+    return res.status(404).json({ error: '해당 배차 항목을 찾을 수 없습니다.' });
   }
 
-  res.json({ date, clientId, completedAt });
+  res.json({ itemId, completedAt });
 }));
 
 // 그날 배차 항목의 메모(예: 납품 수량) 수정 - 관리자만 가능
 app.patch('/api/schedule/note', requireAdmin, asyncRoute(async (req, res) => {
-  const date = req.query.date;
-  if (!date || !DATE_PATTERN.test(date)) {
-    return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
-  }
-
-  const { clientId } = req.body || {};
-  if (typeof clientId !== 'string') {
-    return res.status(400).json({ error: 'clientId(문자열)가 필요합니다.' });
+  const { itemId } = req.body || {};
+  if (typeof itemId !== 'string') {
+    return res.status(400).json({ error: 'itemId(문자열)가 필요합니다.' });
   }
 
   const note = sanitizeText(req.body?.note, 200);
 
-  const savedNote = await db.setItemNote(date, clientId, note);
+  const savedNote = await db.setItemNote(itemId, note);
   if (savedNote === undefined) {
-    return res.status(404).json({ error: '해당 날짜의 배차 목록에서 거래처를 찾을 수 없습니다.' });
+    return res.status(404).json({ error: '해당 배차 항목을 찾을 수 없습니다.' });
   }
 
-  res.json({ date, clientId, note: savedNote });
+  res.json({ itemId, note: savedNote });
 }));
 
 // 달력 화면에서 날짜별 배차 건수를 보여주기 위한 월별 집계 (모든 로그인 사용자 가능)
 app.get('/api/schedule/month', asyncRoute(async (req, res) => {
   const month = req.query.month;
+  const vehicle = req.query.vehicle;
   if (!month || !MONTH_PATTERN.test(month)) {
     return res.status(400).json({ error: '월 형식이 올바르지 않습니다 (YYYY-MM).' });
   }
+  if (!isValidVehicle(vehicle)) {
+    return res.status(400).json({ error: '차량 종류가 올바르지 않습니다.' });
+  }
 
-  const counts = await db.getScheduleCountsForMonth(month);
-  res.json({ month, counts });
+  const counts = await db.getScheduleCountsForMonth(month, vehicle);
+  res.json({ month, vehicle, counts });
 }));
 
 // ---------- 네이버 지오코딩 ----------
