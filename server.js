@@ -4,14 +4,12 @@ const express = require('express');
 const session = require('express-session');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const fs = require('fs');
 const path = require('path');
 const fetch = require('node-fetch');
+const db = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DATA_FILE = path.join(__dirname, 'data', 'clients.json');
-const SCHEDULE_FILE = path.join(__dirname, 'data', 'schedule.json');
 const isProd = process.env.NODE_ENV === 'production';
 
 // Render/여러 호스팅은 프록시 뒤에서 동작하므로, 보안 쿠키(secure)가 제대로 동작하려면 필요
@@ -20,7 +18,8 @@ app.set('trust proxy', 1);
 // ---------- 필수 환경변수 점검 ----------
 // ADMIN 계정: 거래처 등록/수정/삭제까지 가능 (관리자/배차 담당자용)
 // VIEWER 계정: 거래처 조회만 가능, 등록/수정/삭제 불가 (기사님용)
-const REQUIRED_ENV = ['SESSION_SECRET', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'VIEWER_USERNAME', 'VIEWER_PASSWORD'];
+// DATABASE_URL: Neon(PostgreSQL) 연결 문자열 - 데이터가 여기에 영구 저장됩니다.
+const REQUIRED_ENV = ['SESSION_SECRET', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'VIEWER_USERNAME', 'VIEWER_PASSWORD', 'DATABASE_URL'];
 const missingEnv = REQUIRED_ENV.filter(key => !process.env[key]);
 if (missingEnv.length > 0) {
   console.error(`[보안 설정 오류] 다음 환경변수가 설정되지 않았습니다: ${missingEnv.join(', ')}`);
@@ -159,18 +158,9 @@ function requireAdmin(req, res, next) {
   return res.status(403).json({ error: '이 작업은 관리자 계정만 할 수 있습니다.' });
 }
 
-// ---------- 데이터 헬퍼 ----------
-function readClients() {
-  try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-    return JSON.parse(raw || '[]');
-  } catch (err) {
-    return [];
-  }
-}
-
-function writeClients(clients) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(clients, null, 2), 'utf-8');
+// 비동기 라우트 핸들러의 에러를 자동으로 catch해서 에러 핸들러로 넘겨주는 헬퍼
+function asyncRoute(fn) {
+  return (req, res, next) => fn(req, res, next).catch(next);
 }
 
 function genId() {
@@ -182,21 +172,7 @@ function sanitizeText(value, maxLen) {
   return value.trim().slice(0, maxLen);
 }
 
-// ---------- 배차 일정 데이터 헬퍼 ----------
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-function readSchedule() {
-  try {
-    const raw = fs.readFileSync(SCHEDULE_FILE, 'utf-8');
-    return JSON.parse(raw || '{}');
-  } catch (err) {
-    return {};
-  }
-}
-
-function writeSchedule(schedule) {
-  fs.writeFileSync(SCHEDULE_FILE, JSON.stringify(schedule, null, 2), 'utf-8');
-}
 
 // ---------- 프론트엔드용 설정(공개 가능한 지도 클라이언트 ID만 전달) ----------
 app.get('/api/config', (req, res) => {
@@ -206,11 +182,11 @@ app.get('/api/config', (req, res) => {
 });
 
 // ---------- 거래처 CRUD (모두 로그인 필요) ----------
-app.get('/api/clients', (req, res) => {
-  res.json(readClients());
-});
+app.get('/api/clients', asyncRoute(async (req, res) => {
+  res.json(await db.getAllClients());
+}));
 
-app.post('/api/clients', requireAdmin, async (req, res) => {
+app.post('/api/clients', requireAdmin, asyncRoute(async (req, res) => {
   const name = sanitizeText(req.body?.name, 100);
   const address = sanitizeText(req.body?.address, 200);
   const manager = sanitizeText(req.body?.manager, 50);
@@ -232,8 +208,7 @@ app.post('/api/clients', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: `주소를 좌표로 변환하지 못했습니다: ${err.message}` });
   }
 
-  const clients = readClients();
-  const newClient = {
+  const newClient = await db.createClient({
     id: genId(),
     name,
     address,
@@ -241,21 +216,16 @@ app.post('/api/clients', requireAdmin, async (req, res) => {
     phone,
     memo,
     lat,
-    lng,
-    createdAt: new Date().toISOString()
-  };
+    lng
+  });
 
-  clients.push(newClient);
-  writeClients(clients);
   res.status(201).json(newClient);
-});
+}));
 
-app.put('/api/clients/:id', requireAdmin, async (req, res) => {
-  const clients = readClients();
-  const idx = clients.findIndex(c => c.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: '거래처를 찾을 수 없습니다.' });
+app.put('/api/clients/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const existing = await db.getClientById(req.params.id);
+  if (!existing) return res.status(404).json({ error: '거래처를 찾을 수 없습니다.' });
 
-  const existing = clients[idx];
   const name = req.body?.name !== undefined ? sanitizeText(req.body.name, 100) : existing.name;
   const address = req.body?.address !== undefined ? sanitizeText(req.body.address, 200) : existing.address;
   const manager = req.body?.manager !== undefined ? sanitizeText(req.body.manager, 50) : existing.manager;
@@ -275,67 +245,34 @@ app.put('/api/clients/:id', requireAdmin, async (req, res) => {
     }
   }
 
-  clients[idx] = { ...existing, name, address, manager, phone, memo, lat, lng };
+  const updated = await db.updateClient(req.params.id, { name, address, manager, phone, memo, lat, lng });
+  res.json(updated);
+}));
 
-  writeClients(clients);
-  res.json(clients[idx]);
-});
-
-app.delete('/api/clients/:id', requireAdmin, (req, res) => {
-  const clients = readClients();
-  const filtered = clients.filter(c => c.id !== req.params.id);
-  if (filtered.length === clients.length) {
-    return res.status(404).json({ error: '거래처를 찾을 수 없습니다.' });
-  }
-  writeClients(filtered);
+app.delete('/api/clients/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const deleted = await db.deleteClient(req.params.id);
+  if (!deleted) return res.status(404).json({ error: '거래처를 찾을 수 없습니다.' });
   res.status(204).end();
-});
+}));
 
 // ---------- 배차 일정 (특정 날짜에 어떤 거래처를 어떤 순서로, 언제 갔는지) ----------
-// 저장 형식: schedule[date] = { startedAt: ISO문자열|null, items: [{ clientId, completedAt: ISO문자열|null }] }
-// (예전 형식들도 계속 읽을 수 있도록 호환 처리)
-function normalizeScheduleEntry(rawEntry) {
-  if (!rawEntry) return { startedAt: null, items: [] };
-
-  const rawItems = Array.isArray(rawEntry) ? rawEntry : rawEntry.items;
-  const startedAt = Array.isArray(rawEntry) ? null : (rawEntry.startedAt || null);
-
-  const items = (Array.isArray(rawItems) ? rawItems : []).map(item => {
-    if (typeof item === 'string') return { clientId: item, completedAt: null };
-    return {
-      clientId: item.clientId,
-      completedAt: item.completedAt || (item.done ? new Date(0).toISOString() : null)
-    };
-  });
-
-  return { startedAt, items };
-}
-
-app.get('/api/schedule', (req, res) => {
+app.get('/api/schedule', asyncRoute(async (req, res) => {
   const date = req.query.date;
   if (!date || !DATE_PATTERN.test(date)) {
     return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
   }
 
-  const schedule = readSchedule();
-  const entry = normalizeScheduleEntry(schedule[date]);
-  const clients = readClients();
-  const clientById = Object.fromEntries(clients.map(c => [c.id, c]));
-
-  // 순서를 유지하면서, 이미 삭제된 거래처는 목록에서 자동으로 제외
-  const orderedClients = entry.items
-    .filter(item => clientById[item.clientId])
-    .map(item => ({ ...clientById[item.clientId], completedAt: item.completedAt }));
+  const { startedAt, clients } = await db.getScheduleForDate(date);
 
   res.json({
     date,
-    startedAt: entry.startedAt,
-    clientIds: orderedClients.map(c => c.id),
-    clients: orderedClients
+    startedAt,
+    clientIds: clients.map(c => c.id),
+    clients
   });
-});
+}));
 
-app.put('/api/schedule', requireAdmin, (req, res) => {
+app.put('/api/schedule', requireAdmin, asyncRoute(async (req, res) => {
   const date = req.query.date;
   if (!date || !DATE_PATTERN.test(date)) {
     return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
@@ -347,7 +284,8 @@ app.put('/api/schedule', requireAdmin, (req, res) => {
   }
 
   // 실제 존재하는 거래처 id만 저장 (중복 제거, 순서는 그대로 유지)
-  const existingIds = new Set(readClients().map(c => c.id));
+  const allClients = await db.getAllClients();
+  const existingIds = new Set(allClients.map(c => c.id));
   const seen = new Set();
   const cleanIds = clientIds.filter(id => {
     if (!existingIds.has(id) || seen.has(id)) return false;
@@ -355,41 +293,25 @@ app.put('/api/schedule', requireAdmin, (req, res) => {
     return true;
   });
 
-  const schedule = readSchedule();
-  const existingEntry = normalizeScheduleEntry(schedule[date]);
-  // 기존에 체크되어 있던 완료 시각은 그대로 유지하고, 새로 추가된 거래처만 완료 전 상태로 시작
-  const previousCompletedAt = new Map(existingEntry.items.map(item => [item.clientId, item.completedAt]));
-  const newItems = cleanIds.map(clientId => ({ clientId, completedAt: previousCompletedAt.get(clientId) || null }));
-
-  if (newItems.length === 0) {
-    delete schedule[date];
-  } else {
-    schedule[date] = { startedAt: existingEntry.startedAt, items: newItems };
-  }
-  writeSchedule(schedule);
+  await db.setScheduleItems(date, cleanIds);
 
   res.json({ date, clientIds: cleanIds });
-});
+}));
 
 // 아침에 오늘 배차를 시작할 때 누르는 버튼 (관리자, 기사님 계정 모두 가능)
-app.patch('/api/schedule/start', (req, res) => {
+app.patch('/api/schedule/start', asyncRoute(async (req, res) => {
   const date = req.query.date;
   if (!date || !DATE_PATTERN.test(date)) {
     return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
   }
 
-  const schedule = readSchedule();
-  const entry = normalizeScheduleEntry(schedule[date]);
-  entry.startedAt = new Date().toISOString();
-  schedule[date] = entry;
-  writeSchedule(schedule);
-
-  res.json({ date, startedAt: entry.startedAt });
-});
+  const startedAt = await db.startSchedule(date);
+  res.json({ date, startedAt });
+}));
 
 // 납품 완료 체크 (관리자, 기사님 계정 모두 가능 - 순서 변경 권한과는 별개)
 // 체크할 때마다 완료 시각이 기록되고, 이후 거래처들의 예상 도착시간 계산 기준이 바뀝니다.
-app.patch('/api/schedule/complete', (req, res) => {
+app.patch('/api/schedule/complete', asyncRoute(async (req, res) => {
   const date = req.query.date;
   if (!date || !DATE_PATTERN.test(date)) {
     return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
@@ -400,20 +322,13 @@ app.patch('/api/schedule/complete', (req, res) => {
     return res.status(400).json({ error: 'clientId(문자열), done(boolean)이 필요합니다.' });
   }
 
-  const schedule = readSchedule();
-  const entry = normalizeScheduleEntry(schedule[date]);
-  const target = entry.items.find(item => item.clientId === clientId);
-
-  if (!target) {
+  const completedAt = await db.setItemCompleted(date, clientId, done);
+  if (completedAt === undefined) {
     return res.status(404).json({ error: '해당 날짜의 배차 목록에서 거래처를 찾을 수 없습니다.' });
   }
 
-  target.completedAt = done ? new Date().toISOString() : null;
-  schedule[date] = entry;
-  writeSchedule(schedule);
-
-  res.json({ date, clientId, completedAt: target.completedAt });
-});
+  res.json({ date, clientId, completedAt });
+}));
 
 // ---------- 네이버 지오코딩 ----------
 async function geocodeAddress(address) {
@@ -454,6 +369,15 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: '서버 오류가 발생했습니다.' });
 });
 
-app.listen(PORT, () => {
-  console.log(`거래처 관리 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
-});
+// ---------- DB 테이블 준비 후 서버 시작 ----------
+db.initDb()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`거래처 관리 서버가 http://localhost:${PORT} 에서 실행 중입니다.`);
+    });
+  })
+  .catch((err) => {
+    console.error('[DB 연결 오류] 데이터베이스에 연결하지 못했습니다. DATABASE_URL 값을 확인하세요.');
+    console.error(err);
+    process.exit(1);
+  });
