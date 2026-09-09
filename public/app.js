@@ -20,13 +20,15 @@ let schedulePolyline = null;
 const AVG_SPEED_KMH = 30;
 
 // 달력 탭 상태 (지도 없이 날짜별 배차 목록만 보는 화면)
+// 달력 탭은 차량을 따로 고르지 않고 3.5t/5t을 한 화면에 반반 나눠서 동시에 보여줍니다.
 let calendarMonth = todayDateString().slice(0, 7); // 'YYYY-MM'
 let calendarSelectedDate = todayDateString();
 let calendarWeekDates = []; // 선택한 날짜가 속한 주(일~토) 7개 날짜
-let calendarWeekData = new Map(); // date -> { items: [...] }
-let calendarCounts = {}; // { 'YYYY-MM-DD': 건수 }
+let calendarWeekData = new Map(); // date -> { byVehicle: { '3.5t': [...], '5t': [...] } }
+let calendarCounts = {}; // { 'YYYY-MM-DD': 건수(전체 차량 합계) }
 let calDragIndex = null;
 let calDragDate = null;
+let calDragVehicle = null;
 
 const el = id => document.getElementById(id);
 
@@ -66,7 +68,8 @@ function applyRoleUI() {
   }
 }
 
-// 화면에 있는 모든 차량 선택 버튼(오늘의 배차 탭, 달력 탭 각각)의 활성 표시를 동기화
+// 오늘의 배차 탭 위쪽의 차량 선택 버튼 활성 표시를 동기화
+// (달력 탭은 차량을 따로 고르지 않고 항상 3.5t/5t을 동시에 보여줍니다)
 function applyVehicleUI() {
   document.querySelectorAll('.vehicle-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.vehicle === selectedVehicle);
@@ -81,9 +84,6 @@ function setSelectedVehicle(vehicle) {
 
   if (activeTab === 'schedule') {
     loadSchedule(scheduleDate);
-  } else if (activeTab === 'calendar') {
-    loadCalendarMonth(calendarMonth);
-    selectCalendarDate(calendarSelectedDate);
   }
 }
 
@@ -571,9 +571,10 @@ function shiftMonth(monthStr, delta) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// 달력 탭은 차량 구분 없이 보여주므로, 월별 건수도 전체 차량 합계로 가져옵니다.
 async function loadCalendarMonth(month) {
   try {
-    const data = await fetchJSON(`/api/schedule/month?month=${encodeURIComponent(month)}&vehicle=${encodeURIComponent(selectedVehicle)}`);
+    const data = await fetchJSON(`/api/schedule/month?month=${encodeURIComponent(month)}`);
     calendarCounts = data.counts || {};
   } catch (err) {
     calendarCounts = {};
@@ -669,13 +670,18 @@ function getWeekDates(dateStr) {
   return result;
 }
 
+// 특정 날짜의 두 차량(3.5t, 5t) 배차를 한 번에 가져옵니다.
 async function fetchDaySchedule(date) {
-  try {
-    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(selectedVehicle)}`);
-    return { items: data.items };
-  } catch (err) {
-    return { items: [] };
-  }
+  const byVehicle = {};
+  await Promise.all(VEHICLES.map(async (vehicle) => {
+    try {
+      const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(vehicle)}`);
+      byVehicle[vehicle] = data.items;
+    } catch (err) {
+      byVehicle[vehicle] = [];
+    }
+  }));
+  return { byVehicle };
 }
 
 async function selectCalendarDate(dateStr) {
@@ -693,7 +699,8 @@ async function loadCalendarWeek() {
 
 // 선택한 날짜가 속한 주(일~토)를 한 줄에 나란히 보여주는 영역을 만듭니다.
 // 실제 납품을 가지 않는 토/일요일은 좁게, 월~금은 넓게 표시합니다.
-// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜의 칸으로 드래그해서 옮기는 것도 가능합니다.
+// 각 날짜 칸 안에는 3.5t/5t 두 차량의 배차가 반씩 나뉘어 동시에 보이고,
+// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜(또는 다른 차량) 칸으로 드래그해서 옮기는 것도 가능합니다.
 function buildWeekStripNode() {
   const strip = document.createElement('div');
   strip.className = 'cal-week-strip';
@@ -704,7 +711,6 @@ function buildWeekStripNode() {
 
   calendarWeekDates.forEach((dateStr, dowIndex) => {
     const isWeekend = dowIndex === 0 || dowIndex === 6;
-    const dayData = calendarWeekData.get(dateStr) || { items: [] };
     const dayNum = Number(dateStr.split('-')[2]);
 
     const col = document.createElement('div');
@@ -718,129 +724,10 @@ function buildWeekStripNode() {
     header.innerHTML = `<span class="cal-day-dow">${dowNames[dowIndex]}</span><span class="cal-day-num">${dayNum}</span>`;
     col.appendChild(header);
 
-    const listEl = document.createElement('ul');
-    listEl.className = 'cal-day-list';
-
-    if (dayData.items.length === 0) {
-      const empty = document.createElement('li');
-      empty.className = 'cal-day-empty';
-      empty.textContent = '-';
-      listEl.appendChild(empty);
-    } else {
-      dayData.items.forEach((item, index) => {
-        const isDone = !!item.completedAt;
-        const note = item.note || '';
-
-        const li = document.createElement('li');
-        li.className = 'cal-day-item' + (isDone ? ' done' : '');
-        li.dataset.index = String(index);
-        li.title = `${item.name} · ${item.address}`;
-
-        li.innerHTML = `
-          <div class="cal-day-item-top">
-            <span class="cal-day-item-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</span>
-            <span class="cal-day-item-name">${escapeHtml(item.name)}</span>
-          </div>
-        `;
-
-        if (isAdmin) {
-          const removeBtn = document.createElement('button');
-          removeBtn.type = 'button';
-          removeBtn.className = 'cal-day-remove-btn';
-          removeBtn.textContent = '×';
-          removeBtn.addEventListener('click', () => removeDayItem(dateStr, index));
-          li.appendChild(removeBtn);
-
-          const noteInput = document.createElement('input');
-          noteInput.type = 'text';
-          noteInput.className = 'cal-day-note-input';
-          noteInput.placeholder = '수량';
-          noteInput.value = note;
-          noteInput.maxLength = 200;
-          if (item.itemId) {
-            noteInput.addEventListener('blur', () => saveDayNote(dateStr, item.itemId, noteInput.value));
-          } else {
-            noteInput.disabled = true; // 방금 추가/이동되어 아직 저장 중인 항목
-          }
-          li.appendChild(noteInput);
-
-          // 드래그로 순서를 바꾸거나(같은 날짜), 다른 날짜 칸으로 옮길 수 있습니다.
-          li.draggable = true;
-          li.addEventListener('dragstart', (e) => {
-            calDragIndex = index;
-            calDragDate = dateStr;
-            e.dataTransfer.effectAllowed = 'move';
-            li.classList.add('dragging');
-          });
-          li.addEventListener('dragend', () => {
-            li.classList.remove('dragging');
-            document.querySelectorAll('.cal-day-item').forEach(el2 => el2.classList.remove('drag-over'));
-          });
-          li.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            li.classList.add('drag-over');
-          });
-          li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
-          li.addEventListener('drop', (e) => {
-            e.preventDefault();
-            li.classList.remove('drag-over');
-            moveDraggedItem(dateStr, Number(li.dataset.index));
-          });
-        } else if (note) {
-          const noteText = document.createElement('div');
-          noteText.className = 'cal-day-note-text';
-          noteText.textContent = `📦${note}`;
-          li.appendChild(noteText);
-        }
-
-        listEl.appendChild(li);
-      });
-    }
-
-    // 목록의 빈 공간(항목이 없는 날, 또는 맨 끝)에 놓아도 추가/이동되도록 목록 자체도 드롭 대상으로 둡니다.
-    if (isAdmin) {
-      listEl.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        listEl.classList.add('drag-over-list');
-      });
-      listEl.addEventListener('dragleave', () => listEl.classList.remove('drag-over-list'));
-      listEl.addEventListener('drop', (e) => {
-        e.preventDefault();
-        listEl.classList.remove('drag-over-list');
-        moveDraggedItem(dateStr, dayData.items.length);
-      });
-    }
-
-    col.appendChild(listEl);
-
-    if (isAdmin) {
-      const addWrap = document.createElement('div');
-      addWrap.className = 'cal-day-add';
-      const select = document.createElement('select');
-      select.className = 'cal-day-add-select';
-
-      const defaultOpt = document.createElement('option');
-      defaultOpt.value = '';
-      defaultOpt.textContent = '+ 추가';
-      select.appendChild(defaultOpt);
-
-      // 같은 거래처(예: 회사)를 하루에 여러 번 추가할 수 있도록 이미 추가된 곳도 목록에 계속 보여줍니다.
-      clients.forEach(c => {
-        const opt = document.createElement('option');
-        opt.value = c.id;
-        opt.textContent = c.name;
-        select.appendChild(opt);
-      });
-
-      select.addEventListener('change', () => {
-        const id = select.value;
-        if (!id) return;
-        addDayItem(dateStr, id);
-      });
-
-      addWrap.appendChild(select);
-      col.appendChild(addWrap);
-    }
+    // 차량 두 대(3.5t, 5t)를 한 칸 안에 반씩 나눠서 동시에 보여줍니다.
+    VEHICLES.forEach(vehicle => {
+      col.appendChild(buildDayVehicleSection(dateStr, vehicle, isAdmin));
+    });
 
     strip.appendChild(col);
   });
@@ -848,45 +735,231 @@ function buildWeekStripNode() {
   return strip;
 }
 
-// 드래그했던 항목을 targetDate의 targetIndex 위치로 옮깁니다.
-// 같은 날짜 안에서는 순서만 바뀌고, 다른 날짜로 옮기면 완료 상태는 초기화되고(그 날짜엔 아직
+// 하루 칸 안에서 차량 한 대 분량(라벨 + 목록 + 검색해서 추가하는 입력창)을 만듭니다.
+function buildDayVehicleSection(dateStr, vehicle, isAdmin) {
+  const section = document.createElement('div');
+  section.className = 'cal-vehicle-section';
+
+  const label = document.createElement('div');
+  label.className = 'cal-vehicle-label';
+  label.textContent = vehicle;
+  section.appendChild(label);
+
+  const dayData = calendarWeekData.get(dateStr) || { byVehicle: {} };
+  const items = (dayData.byVehicle && dayData.byVehicle[vehicle]) || [];
+
+  const listEl = document.createElement('ul');
+  listEl.className = 'cal-day-list';
+
+  if (items.length === 0) {
+    const empty = document.createElement('li');
+    empty.className = 'cal-day-empty';
+    empty.textContent = '-';
+    listEl.appendChild(empty);
+  } else {
+    items.forEach((item, index) => {
+      const isDone = !!item.completedAt;
+      const note = item.note || '';
+
+      const li = document.createElement('li');
+      li.className = 'cal-day-item' + (isDone ? ' done' : '');
+      li.dataset.index = String(index);
+      li.title = `${item.name} · ${item.address}`;
+
+      li.innerHTML = `
+        <div class="cal-day-item-top">
+          <span class="cal-day-item-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</span>
+          <span class="cal-day-item-name">${escapeHtml(item.name)}</span>
+        </div>
+      `;
+
+      if (isAdmin) {
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.className = 'cal-day-remove-btn';
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', () => removeDayItem(dateStr, vehicle, index));
+        li.appendChild(removeBtn);
+
+        const noteInput = document.createElement('input');
+        noteInput.type = 'text';
+        noteInput.className = 'cal-day-note-input';
+        noteInput.placeholder = '수량';
+        noteInput.value = note;
+        noteInput.maxLength = 200;
+        if (item.itemId) {
+          noteInput.addEventListener('blur', () => saveDayNote(dateStr, vehicle, item.itemId, noteInput.value));
+        } else {
+          noteInput.disabled = true; // 방금 추가/이동되어 아직 저장 중인 항목
+        }
+        li.appendChild(noteInput);
+
+        // 드래그로 순서를 바꾸거나(같은 날짜/차량), 다른 날짜나 다른 차량 칸으로 옮길 수 있습니다.
+        li.draggable = true;
+        li.addEventListener('dragstart', (e) => {
+          calDragIndex = index;
+          calDragDate = dateStr;
+          calDragVehicle = vehicle;
+          e.dataTransfer.effectAllowed = 'move';
+          li.classList.add('dragging');
+        });
+        li.addEventListener('dragend', () => {
+          li.classList.remove('dragging');
+          document.querySelectorAll('.cal-day-item').forEach(el2 => el2.classList.remove('drag-over'));
+        });
+        li.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          li.classList.add('drag-over');
+        });
+        li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+        li.addEventListener('drop', (e) => {
+          e.preventDefault();
+          li.classList.remove('drag-over');
+          moveDraggedItem(dateStr, vehicle, Number(li.dataset.index));
+        });
+      } else if (note) {
+        const noteText = document.createElement('div');
+        noteText.className = 'cal-day-note-text';
+        noteText.textContent = `📦${note}`;
+        li.appendChild(noteText);
+      }
+
+      listEl.appendChild(li);
+    });
+  }
+
+  // 목록의 빈 공간(항목이 없는 날, 또는 맨 끝)에 놓아도 추가/이동되도록 목록 자체도 드롭 대상으로 둡니다.
+  if (isAdmin) {
+    listEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      listEl.classList.add('drag-over-list');
+    });
+    listEl.addEventListener('dragleave', () => listEl.classList.remove('drag-over-list'));
+    listEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      listEl.classList.remove('drag-over-list');
+      moveDraggedItem(dateStr, vehicle, items.length);
+    });
+  }
+
+  section.appendChild(listEl);
+
+  if (isAdmin) {
+    section.appendChild(buildAddControl(dateStr, vehicle));
+  }
+
+  return section;
+}
+
+// 거래처를 검색해서 추가하는 입력창을 만듭니다. (같은 거래처를 하루에 여러 번 추가할 수 있으므로
+// 이미 추가된 곳도 검색 결과에서 계속 보여줍니다.)
+function buildAddControl(dateStr, vehicle) {
+  const wrap = document.createElement('div');
+  wrap.className = 'cal-day-add';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'cal-day-add-input';
+  input.placeholder = '+ 거래처 검색';
+  wrap.appendChild(input);
+
+  const results = document.createElement('div');
+  results.className = 'cal-day-add-results hidden';
+  wrap.appendChild(results);
+
+  function renderResults(query) {
+    const q = query.trim().toLowerCase();
+    const filtered = q
+      ? clients.filter(c => [c.name, c.address].join(' ').toLowerCase().includes(q))
+      : clients;
+
+    results.innerHTML = '';
+
+    if (filtered.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'cal-day-add-empty';
+      empty.textContent = '검색 결과가 없습니다.';
+      results.appendChild(empty);
+      return;
+    }
+
+    filtered.slice(0, 30).forEach(c => {
+      const item = document.createElement('div');
+      item.className = 'cal-day-add-result';
+      item.textContent = `${c.name} (${c.address})`;
+      // click 대신 mousedown에서 처리해야 입력창의 blur보다 먼저 실행되어
+      // 결과 목록이 blur로 먼저 숨겨지는 문제 없이 클릭이 정상 동작합니다.
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        input.value = '';
+        results.classList.add('hidden');
+        addDayItem(dateStr, vehicle, c.id);
+      });
+      results.appendChild(item);
+    });
+  }
+
+  input.addEventListener('focus', () => {
+    renderResults(input.value);
+    results.classList.remove('hidden');
+  });
+  input.addEventListener('input', () => {
+    renderResults(input.value);
+    results.classList.remove('hidden');
+  });
+  input.addEventListener('blur', () => {
+    results.classList.add('hidden');
+  });
+
+  return wrap;
+}
+
+// 드래그했던 항목을 targetDate/targetVehicle의 targetIndex 위치로 옮깁니다.
+// 같은 날짜+차량 안에서는 순서만 바뀌고, 다른 날짜나 차량으로 옮기면 완료 상태는 초기화되고(거기선 아직
 // 안 간 것이므로) 메모는 그대로 유지된 채 새 항목으로 등록됩니다.
-function moveDraggedItem(targetDate, targetIndex) {
+function moveDraggedItem(targetDate, targetVehicle, targetIndex) {
   const sourceDate = calDragDate;
+  const sourceVehicle = calDragVehicle;
   const sourceIndex = calDragIndex;
   calDragDate = null;
+  calDragVehicle = null;
   calDragIndex = null;
-  if (sourceDate == null || sourceIndex == null) return;
+  if (sourceDate == null || sourceVehicle == null || sourceIndex == null) return;
 
   const sourceDayData = calendarWeekData.get(sourceDate);
   const targetDayData = calendarWeekData.get(targetDate);
   if (!sourceDayData || !targetDayData) return;
+  const sourceItems = sourceDayData.byVehicle && sourceDayData.byVehicle[sourceVehicle];
+  const targetItems = targetDayData.byVehicle && targetDayData.byVehicle[targetVehicle];
+  if (!sourceItems || !targetItems) return;
 
-  if (sourceDate === targetDate) {
+  if (sourceDate === targetDate && sourceVehicle === targetVehicle) {
     if (sourceIndex === targetIndex) return;
-    const [moved] = sourceDayData.items.splice(sourceIndex, 1);
-    sourceDayData.items.splice(targetIndex, 0, moved);
+    const [moved] = sourceItems.splice(sourceIndex, 1);
+    sourceItems.splice(targetIndex, 0, moved);
     renderCalendarGrid();
-    saveDayOrder(sourceDate);
+    saveDayVehicleOrder(sourceDate, sourceVehicle);
   } else {
-    const [moved] = sourceDayData.items.splice(sourceIndex, 1);
-    targetDayData.items.splice(targetIndex, 0, { ...moved, itemId: null, completedAt: null });
+    const [moved] = sourceItems.splice(sourceIndex, 1);
+    targetItems.splice(targetIndex, 0, { ...moved, itemId: null, completedAt: null });
     renderCalendarGrid();
-    saveDayOrder(sourceDate);
-    saveDayOrder(targetDate);
+    saveDayVehicleOrder(sourceDate, sourceVehicle);
+    saveDayVehicleOrder(targetDate, targetVehicle);
   }
 }
 
-async function saveDayOrder(date) {
+async function saveDayVehicleOrder(date, vehicle) {
   const dayData = calendarWeekData.get(date);
-  if (!dayData) return;
+  if (!dayData || !dayData.byVehicle) return;
+  const items = dayData.byVehicle[vehicle];
+  if (!items) return;
   try {
-    const res = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(selectedVehicle)}`, {
+    const res = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(vehicle)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: dayData.items.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })) })
+      body: JSON.stringify({ items: items.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })) })
     });
-    dayData.items = res.items; // 실제 itemId/순서를 서버 응답으로 다시 채움
+    dayData.byVehicle[vehicle] = res.items; // 실제 itemId/순서를 서버 응답으로 다시 채움
     renderCalendarGrid();
     await loadCalendarMonth(calendarMonth);
   } catch (err) {
@@ -894,30 +967,31 @@ async function saveDayOrder(date) {
   }
 }
 
-async function removeDayItem(date, index) {
+async function removeDayItem(date, vehicle, index) {
   const dayData = calendarWeekData.get(date);
-  if (!dayData) return;
-  dayData.items.splice(index, 1);
+  if (!dayData || !dayData.byVehicle || !dayData.byVehicle[vehicle]) return;
+  dayData.byVehicle[vehicle].splice(index, 1);
   renderCalendarGrid();
-  await saveDayOrder(date);
+  await saveDayVehicleOrder(date, vehicle);
   showToast('배차 목록에서 제외했습니다.');
 }
 
-async function addDayItem(date, clientId) {
+async function addDayItem(date, vehicle, clientId) {
   const dayData = calendarWeekData.get(date);
-  if (!dayData) return;
+  if (!dayData || !dayData.byVehicle || !dayData.byVehicle[vehicle]) return;
   const clientData = clients.find(c => c.id === clientId);
   if (!clientData) return;
-  dayData.items.push({ itemId: null, ...clientData, completedAt: null, note: '' });
+  dayData.byVehicle[vehicle].push({ itemId: null, ...clientData, completedAt: null, note: '' });
   renderCalendarGrid();
-  await saveDayOrder(date);
+  await saveDayVehicleOrder(date, vehicle);
   showToast('배차 목록에 추가했습니다.');
 }
 
-async function saveDayNote(date, itemId, note) {
+async function saveDayNote(date, vehicle, itemId, note) {
   const dayData = calendarWeekData.get(date);
-  if (!dayData || !itemId) return;
-  const item = dayData.items.find(it => it.itemId === itemId);
+  if (!dayData || !dayData.byVehicle || !itemId) return;
+  const items = dayData.byVehicle[vehicle];
+  const item = items && items.find(it => it.itemId === itemId);
   const trimmed = note.trim();
   if (item && (item.note || '') === trimmed) return;
   try {
