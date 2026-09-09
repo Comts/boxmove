@@ -527,12 +527,24 @@ html, body {
   color: white;
 }
 
+/* 주간 블록 (이번 주 / 다음 주를 구분하는 라벨 + 그 주의 스트립을 감싸는 영역) */
+.cal-week-block {
+  margin: 4px 0;
+}
+
+.cal-week-block-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #999;
+  padding: 0 4px 4px;
+}
+
 /* 주간 스트립 (선택한 주(週) 행 바로 아래에 펼쳐져서 일~토 7일을 나란히 표시) */
 .cal-week-strip {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  margin: 4px 0 10px;
+  margin: 0 0 10px;
   padding: 10px 8px;
   background: #f7f9fc;
   border-radius: 10px;
