@@ -704,21 +704,91 @@ html, body {
 }
 
 .cal-day-add {
+  position: relative;
   margin-top: 2px;
 }
 
-.cal-day-add-select {
+.cal-day-add-input {
   width: 100%;
   font-size: 11px;
-  padding: 4px;
+  padding: 4px 6px;
   border-radius: 6px;
   border: 1px solid #ddd;
   color: #444;
+  font-family: inherit;
 }
 
-.cal-day-col.weekend .cal-day-add-select {
+.cal-day-col.weekend .cal-day-add-input {
   font-size: 8px;
   padding: 2px;
+}
+
+.cal-day-add-results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  margin-top: 2px;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  max-height: 160px;
+  overflow-y: auto;
+  z-index: 30;
+}
+
+.cal-day-add-results.hidden {
+  display: none;
+}
+
+.cal-day-add-result {
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #1f2430;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cal-day-add-result:hover {
+  background: #eef5ff;
+}
+
+.cal-day-add-empty {
+  padding: 6px 8px;
+  font-size: 11px;
+  color: #999;
+}
+
+/* 달력 탭: 하루 칸 안에서 3.5t/5t 두 차량을 반반 나눠서 동시에 표시 */
+.cal-vehicle-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed #e5e7eb;
+}
+
+.cal-vehicle-section:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.cal-vehicle-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #1f6feb;
+  background: #eef5ff;
+  border-radius: 4px;
+  padding: 1px 5px;
+  align-self: flex-start;
+}
+
+.cal-day-col.weekend .cal-vehicle-label {
+  font-size: 8px;
+  padding: 0 3px;
 }
 
 /* 모달 */
