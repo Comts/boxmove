@@ -2,6 +2,7 @@ require('dotenv').config();
 const crypto = require('crypto');
 const express = require('express');
 const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
@@ -56,16 +57,26 @@ app.use(helmet({
 app.use(express.json({ limit: '20kb' }));
 
 // ---------- 세션 ----------
+// 세션을 메모리(MemoryStore)가 아니라 Neon(PostgreSQL)에 저장합니다.
+// 예전에는 서버가 재시작/슬립될 때마다(Render 무료 플랜은 자주 발생) 메모리에 있던 로그인 정보가
+// 통째로 사라져서, 기사님들이 계속 다시 로그인해야 하는 문제가 있었습니다. DB에 저장하면 서버가
+// 재시작되어도 로그인이 유지됩니다. 세션 테이블은 최초 실행 시 자동으로 만들어집니다.
 app.use(session({
+  store: new pgSession({
+    pool: db.pool,
+    tableName: 'user_sessions',
+    createTableIfMissing: true
+  }),
   secret: process.env.SESSION_SECRET,
   name: 'transport.sid',
   resave: false,
   saveUninitialized: false,
+  rolling: true, // 사용할 때마다 만료시간을 30일로 다시 늘려줘서, 계속 쓰는 한 로그아웃되지 않습니다.
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
     secure: isProd, // 배포(HTTPS) 환경에서는 true, 로컬 http 테스트에서는 false
-    maxAge: 1000 * 60 * 60 * 8 // 8시간
+    maxAge: 1000 * 60 * 60 * 24 * 30 // 30일 (계속 사용하면 rolling 옵션으로 매번 갱신됨)
   }
 }));
 
