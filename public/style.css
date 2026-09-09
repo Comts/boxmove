@@ -235,6 +235,11 @@ html, body {
   color: white;
 }
 
+/* 기사님 계정은 본인 차량으로 고정되어 전환 버튼 자체가 필요 없어 숨깁니다 (관리자만 보임) */
+.vehicle-switcher.hidden {
+  display: none;
+}
+
 /* 배차 일정 */
 .schedule-date-box {
   display: flex;
