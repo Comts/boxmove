@@ -557,11 +557,12 @@ function renderScheduleMap() {
     });
 
     const infoWindow = new naver.maps.InfoWindow({
-      content: `<div style="padding:10px 12px; font-size:13px; line-height:1.5;">
+      content: `<div style="padding:10px 12px; font-size:13px; line-height:1.5; max-width:220px;">
         <strong>${index + 1}. ${escapeHtml(item.name)}</strong><br/>
         ${escapeHtml(item.address)}<br/>
         ${item.manager ? '담당자: ' + escapeHtml(item.manager) + '<br/>' : ''}
-        ${item.phone ? '연락처: ' + escapeHtml(item.phone) : ''}
+        ${item.phone ? '연락처: ' + escapeHtml(item.phone) + '<br/>' : ''}
+        ${item.memo ? '<span style="color:#b45309;">📝 ' + escapeHtml(item.memo) + '</span>' : ''}
       </div>`
     });
 
