@@ -17,9 +17,17 @@ app.set('trust proxy', 1);
 
 // ---------- 필수 환경변수 점검 ----------
 // ADMIN 계정: 거래처 등록/수정/삭제까지 가능 (관리자/배차 담당자용)
-// VIEWER 계정: 거래처 조회만 가능, 등록/수정/삭제 불가 (기사님용)
+// VIEWER 계정: 거래처 조회만 가능, 등록/수정/삭제 불가 (기사님용) - 차량별로 계정이 따로 있습니다.
+//   VIEWER_35T_* 로 로그인하면 3.5t 차량 기사님, VIEWER_5T_* 로 로그인하면 5t 차량 기사님으로 인식되어
+//   로그인 직후 각자 본인 차량의 "오늘의 배차"만 바로 보여줍니다.
 // DATABASE_URL: Neon(PostgreSQL) 연결 문자열 - 데이터가 여기에 영구 저장됩니다.
-const REQUIRED_ENV = ['SESSION_SECRET', 'ADMIN_USERNAME', 'ADMIN_PASSWORD', 'VIEWER_USERNAME', 'VIEWER_PASSWORD', 'DATABASE_URL'];
+const REQUIRED_ENV = [
+  'SESSION_SECRET',
+  'ADMIN_USERNAME', 'ADMIN_PASSWORD',
+  'VIEWER_35T_USERNAME', 'VIEWER_35T_PASSWORD',
+  'VIEWER_5T_USERNAME', 'VIEWER_5T_PASSWORD',
+  'DATABASE_URL'
+];
 const missingEnv = REQUIRED_ENV.filter(key => !process.env[key]);
 if (missingEnv.length > 0) {
   console.error(`[보안 설정 오류] 다음 환경변수가 설정되지 않았습니다: ${missingEnv.join(', ')}`);
@@ -81,14 +89,20 @@ function timingSafeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+// 로그인 성공 시 { role, vehicle } 형태로 반환합니다.
+// role: 'admin' | 'viewer', vehicle: 기사님 계정이면 자신이 모는 차량('3.5t'|'5t'), 관리자는 null(차량 제한 없음)
 function matchAccount(username, password) {
   const isAdmin = timingSafeEqual(username, process.env.ADMIN_USERNAME) &&
     timingSafeEqual(password, process.env.ADMIN_PASSWORD);
-  if (isAdmin) return 'admin';
+  if (isAdmin) return { role: 'admin', vehicle: null };
 
-  const isViewer = timingSafeEqual(username, process.env.VIEWER_USERNAME) &&
-    timingSafeEqual(password, process.env.VIEWER_PASSWORD);
-  if (isViewer) return 'viewer';
+  const is35t = timingSafeEqual(username, process.env.VIEWER_35T_USERNAME) &&
+    timingSafeEqual(password, process.env.VIEWER_35T_PASSWORD);
+  if (is35t) return { role: 'viewer', vehicle: '3.5t' };
+
+  const is5t = timingSafeEqual(username, process.env.VIEWER_5T_USERNAME) &&
+    timingSafeEqual(password, process.env.VIEWER_5T_PASSWORD);
+  if (is5t) return { role: 'viewer', vehicle: '5t' };
 
   return null;
 }
@@ -100,9 +114,9 @@ app.post('/api/login', loginLimiter, (req, res) => {
     return res.status(400).json({ error: '아이디와 비밀번호를 입력하세요.' });
   }
 
-  const role = matchAccount(username, password);
+  const account = matchAccount(username, password);
 
-  if (!role) {
+  if (!account) {
     return res.status(401).json({ error: '아이디 또는 비밀번호가 올바르지 않습니다.' });
   }
 
@@ -110,8 +124,9 @@ app.post('/api/login', loginLimiter, (req, res) => {
     if (err) return res.status(500).json({ error: '로그인 처리 중 오류가 발생했습니다.' });
     req.session.loggedIn = true;
     req.session.username = username;
-    req.session.role = role;
-    res.json({ ok: true, role });
+    req.session.role = account.role;
+    req.session.vehicle = account.vehicle;
+    res.json({ ok: true, role: account.role, vehicle: account.vehicle });
   });
 });
 
@@ -126,7 +141,8 @@ app.get('/api/me', (req, res) => {
   res.json({
     loggedIn: !!(req.session && req.session.loggedIn),
     username: req.session?.username || null,
-    role: req.session?.role || null
+    role: req.session?.role || null,
+    vehicle: req.session?.vehicle || null
   });
 });
 
@@ -319,6 +335,8 @@ app.put('/api/schedule', requireAdmin, asyncRoute(async (req, res) => {
 }));
 
 // 아침에 오늘 배차를 시작할 때 누르는 버튼 (관리자, 기사님 계정 모두 가능)
+// 기사님 계정은 화면에서 애초에 본인 차량만 보이지만, 혹시 다른 차량 값으로 직접 요청을 보내더라도
+// 서버에서 본인 차량이 아니면 차단합니다.
 app.patch('/api/schedule/start', asyncRoute(async (req, res) => {
   const date = req.query.date;
   const vehicle = req.query.vehicle;
@@ -327,6 +345,9 @@ app.patch('/api/schedule/start', asyncRoute(async (req, res) => {
   }
   if (!isValidVehicle(vehicle)) {
     return res.status(400).json({ error: '차량 종류가 올바르지 않습니다.' });
+  }
+  if (req.session.role === 'viewer' && req.session.vehicle !== vehicle) {
+    return res.status(403).json({ error: '본인 차량의 배차만 시작할 수 있습니다.' });
   }
 
   const startedAt = await db.startSchedule(date, vehicle);
@@ -368,18 +389,19 @@ app.patch('/api/schedule/note', requireAdmin, asyncRoute(async (req, res) => {
 }));
 
 // 달력 화면에서 날짜별 배차 건수를 보여주기 위한 월별 집계 (모든 로그인 사용자 가능)
+// 달력 탭은 차량 구분 없이 한 번에 보여주므로, vehicle 파라미터는 생략하면 전체 차량 합계를 반환합니다.
 app.get('/api/schedule/month', asyncRoute(async (req, res) => {
   const month = req.query.month;
   const vehicle = req.query.vehicle;
   if (!month || !MONTH_PATTERN.test(month)) {
     return res.status(400).json({ error: '월 형식이 올바르지 않습니다 (YYYY-MM).' });
   }
-  if (!isValidVehicle(vehicle)) {
+  if (vehicle !== undefined && !isValidVehicle(vehicle)) {
     return res.status(400).json({ error: '차량 종류가 올바르지 않습니다.' });
   }
 
   const counts = await db.getScheduleCountsForMonth(month, vehicle);
-  res.json({ month, vehicle, counts });
+  res.json({ month, vehicle: vehicle || null, counts });
 }));
 
 // ---------- 네이버 지오코딩 ----------
