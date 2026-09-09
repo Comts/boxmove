@@ -391,11 +391,23 @@ function renderScheduleList() {
       etaHtml = `<div class="eta">예상 도착 약 ${formatTime(eta.time)}</div>`;
     }
 
+    // 담당자/연락처, 메모(상하차 시간·주의사항 등)도 배차 목록에서 바로 볼 수 있도록 표시합니다.
+    let contactHtml = '';
+    if (item.manager || item.phone) {
+      const parts = [];
+      if (item.manager) parts.push('담당자: ' + escapeHtml(item.manager));
+      if (item.phone) parts.push(escapeHtml(item.phone));
+      contactHtml = `<div class="contact">${parts.join(' · ')}</div>`;
+    }
+    const memoHtml = item.memo ? `<div class="memo">📝 ${escapeHtml(item.memo)}</div>` : '';
+
     li.innerHTML = `
       <div class="schedule-order-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</div>
       <div class="schedule-item-info">
         <div class="name">${escapeHtml(item.name)}</div>
         <div class="addr">${escapeHtml(item.address)}</div>
+        ${contactHtml}
+        ${memoHtml}
         ${etaHtml}
       </div>
     `;
