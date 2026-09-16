@@ -4,7 +4,15 @@ let clients = [];
 let editingId = null;
 let currentRole = null; // 'admin' | 'viewer'
 let currentVehicle = null; // 기사님 계정일 때 본인이 모는 차량('3.5t'|'5t'). 관리자는 null(제한 없음)
-let activeTab = 'clients'; // 'clients' | 'schedule' | 'calendar'
+let activeTab = 'clients'; // 'clients' | 'schedule' | 'calendar' | 'inventory' | 'bulletin'
+
+// 재고 관리 상태 (회사 전체 공용 품목/수량, 관리자만 등록·수정·삭제·수량조정 가능)
+let inventoryItems = [];
+let editingInventoryId = null;
+
+// 게시판식 메모 상태 (회사 전체 공유, 관리자만 작성·수정·삭제 가능)
+let bulletinNotes = [];
+let editingBulletinId = null;
 
 // 차량 선택 (차량별로 배차가 완전히 분리됩니다)
 const VEHICLES = ['3.5t', '5t'];
@@ -72,6 +80,8 @@ function applyRoleUI() {
   const isAdmin = currentRole === 'admin';
   el('addBtn').classList.toggle('hidden', !isAdmin);
   el('scheduleAddBox').classList.toggle('hidden', !isAdmin);
+  el('inventoryAddBox').classList.toggle('hidden', !isAdmin);
+  el('bulletinAddBox').classList.toggle('hidden', !isAdmin);
   // 기사님 계정은 본인 차량으로 고정이라 차량 전환 버튼 자체가 필요 없습니다 (관리자만 전환 가능).
   const vehicleSwitcher = el('vehicleSwitcher');
   if (vehicleSwitcher) vehicleSwitcher.classList.toggle('hidden', !isAdmin);
@@ -258,12 +268,16 @@ function switchTab(tab) {
   el('tabClients').classList.toggle('active', tab === 'clients');
   el('tabSchedule').classList.toggle('active', tab === 'schedule');
   el('tabCalendar').classList.toggle('active', tab === 'calendar');
+  el('tabInventory').classList.toggle('active', tab === 'inventory');
+  el('tabBulletin').classList.toggle('active', tab === 'bulletin');
   el('clientsView').classList.toggle('hidden', tab !== 'clients');
   el('scheduleView').classList.toggle('hidden', tab !== 'schedule');
   el('calendarView').classList.toggle('hidden', tab !== 'calendar');
+  el('inventoryView').classList.toggle('hidden', tab !== 'inventory');
+  el('bulletinView').classList.toggle('hidden', tab !== 'bulletin');
 
-  // 달력 탭은 지도 없이 목록만 보여줍니다.
-  el('layout').classList.toggle('no-map', tab === 'calendar');
+  // 달력/재고/메모 탭은 지도 없이 목록만 보여줍니다.
+  el('layout').classList.toggle('no-map', tab === 'calendar' || tab === 'inventory' || tab === 'bulletin');
 
   if (tab === 'clients') {
     renderMarkers();
@@ -273,6 +287,10 @@ function switchTab(tab) {
   } else if (tab === 'calendar') {
     loadCalendarMonth(calendarMonth);
     selectCalendarDate(calendarSelectedDate);
+  } else if (tab === 'inventory') {
+    refreshInventory();
+  } else if (tab === 'bulletin') {
+    refreshBulletin();
   }
 }
 
@@ -1125,6 +1143,232 @@ async function saveDayNote(date, vehicle, itemId, note) {
   }
 }
 
+// ---------- 재고 관리 (회사 전체 공용, 품목별 수량) ----------
+async function refreshInventory() {
+  try {
+    inventoryItems = await fetchJSON('/api/inventory');
+    renderInventoryList();
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+function renderInventoryList() {
+  const isAdmin = currentRole === 'admin';
+  const list = el('inventoryList');
+  list.innerHTML = '';
+
+  if (inventoryItems.length === 0) {
+    list.innerHTML = `<li class="empty-state">등록된 품목이 없습니다.${isAdmin ? ' 위에서 품목을 추가해주세요.' : ''}</li>`;
+    return;
+  }
+
+  inventoryItems.forEach(item => {
+    const li = document.createElement('li');
+    li.className = 'inventory-item';
+
+    li.innerHTML = `
+      <div class="inventory-item-info">
+        <div class="name">${escapeHtml(item.name)}</div>
+        ${item.memo ? `<div class="memo">${escapeHtml(item.memo)}</div>` : ''}
+      </div>
+      <div class="inventory-qty">${item.quantity}${escapeHtml(item.unit)}</div>
+    `;
+
+    if (isAdmin) {
+      const actions = document.createElement('div');
+      actions.className = 'inventory-item-actions';
+
+      const minusBtn = document.createElement('button');
+      minusBtn.type = 'button';
+      minusBtn.textContent = '−';
+      minusBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        adjustInventoryQuantity(item.id, -1);
+      });
+
+      const plusBtn = document.createElement('button');
+      plusBtn.type = 'button';
+      plusBtn.textContent = '+';
+      plusBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        adjustInventoryQuantity(item.id, 1);
+      });
+
+      actions.appendChild(minusBtn);
+      actions.appendChild(plusBtn);
+      li.appendChild(actions);
+    }
+
+    li.addEventListener('click', () => openInventoryModal(item));
+    list.appendChild(li);
+  });
+}
+
+async function adjustInventoryQuantity(id, delta) {
+  try {
+    const updated = await fetchJSON(`/api/inventory/${id}/adjust`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delta })
+    });
+    const idx = inventoryItems.findIndex(it => it.id === id);
+    if (idx !== -1) inventoryItems[idx] = updated;
+    renderInventoryList();
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+function openInventoryAddModal() {
+  if (currentRole !== 'admin') return; // 방어적 체크 (버튼은 이미 숨겨져 있음)
+  editingInventoryId = null;
+  el('inventoryModalTitle').textContent = '신규 품목 추가';
+  el('inventoryForm').reset();
+  el('invId').value = '';
+  ['invName', 'invQuantity', 'invUnit', 'invMemo'].forEach(id => { el(id).disabled = false; });
+  el('inventoryDeleteBtn').classList.add('hidden');
+  el('inventorySaveBtn').classList.remove('hidden');
+  el('inventoryFormError').classList.add('hidden');
+  el('inventoryModalOverlay').classList.remove('hidden');
+}
+
+function openInventoryModal(item) {
+  const isAdmin = currentRole === 'admin';
+  editingInventoryId = item.id;
+  el('inventoryModalTitle').textContent = isAdmin ? '품목 수정' : '품목 정보';
+  el('invId').value = item.id;
+  el('invName').value = item.name;
+  el('invQuantity').value = item.quantity;
+  el('invUnit').value = item.unit || '';
+  el('invMemo').value = item.memo || '';
+  ['invName', 'invQuantity', 'invUnit', 'invMemo'].forEach(id => { el(id).disabled = !isAdmin; });
+  el('inventoryDeleteBtn').classList.toggle('hidden', !isAdmin);
+  el('inventorySaveBtn').classList.toggle('hidden', !isAdmin);
+  el('inventoryFormError').classList.add('hidden');
+  el('inventoryModalOverlay').classList.remove('hidden');
+}
+
+function closeInventoryModal() {
+  el('inventoryModalOverlay').classList.add('hidden');
+}
+
+// ---------- 게시판식 메모 (회사 전체 공유) ----------
+async function refreshBulletin() {
+  try {
+    bulletinNotes = await fetchJSON('/api/bulletin');
+    renderBulletinList();
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+function formatDateTime(isoOrDate) {
+  const d = isoOrDate instanceof Date ? isoOrDate : new Date(isoOrDate);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${m}/${day} ${formatTime(d)}`;
+}
+
+function renderBulletinList() {
+  const isAdmin = currentRole === 'admin';
+  const list = el('bulletinList');
+  list.innerHTML = '';
+
+  if (bulletinNotes.length === 0) {
+    list.innerHTML = `<li class="empty-state">등록된 메모가 없습니다.${isAdmin ? ' 위에서 메모를 작성해주세요.' : ''}</li>`;
+    return;
+  }
+
+  bulletinNotes.forEach(note => {
+    const li = document.createElement('li');
+    li.className = 'bulletin-item';
+
+    li.innerHTML = `
+      <div class="bulletin-content">${escapeHtml(note.content)}</div>
+      <div class="bulletin-meta">${note.author ? escapeHtml(note.author) + ' · ' : ''}${formatDateTime(note.createdAt)}${note.updatedAt !== note.createdAt ? ' (수정됨)' : ''}</div>
+    `;
+
+    if (isAdmin) {
+      const actions = document.createElement('div');
+      actions.className = 'bulletin-item-actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.type = 'button';
+      editBtn.textContent = '수정';
+      editBtn.addEventListener('click', () => startEditBulletin(note));
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'remove-btn';
+      deleteBtn.textContent = '삭제';
+      deleteBtn.addEventListener('click', () => deleteBulletinNoteHandler(note.id));
+
+      actions.appendChild(editBtn);
+      actions.appendChild(deleteBtn);
+      li.appendChild(actions);
+    }
+
+    list.appendChild(li);
+  });
+}
+
+function startEditBulletin(note) {
+  editingBulletinId = note.id;
+  el('bulletinInput').value = note.content;
+  el('bulletinInput').focus();
+  el('bulletinSubmitBtn').textContent = '수정 완료';
+}
+
+function cancelEditBulletin() {
+  editingBulletinId = null;
+  el('bulletinInput').value = '';
+  el('bulletinSubmitBtn').textContent = '등록';
+}
+
+async function submitBulletin() {
+  const content = el('bulletinInput').value.trim();
+  if (!content) return;
+
+  try {
+    if (editingBulletinId) {
+      const updated = await fetchJSON(`/api/bulletin/${editingBulletinId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      });
+      const idx = bulletinNotes.findIndex(n => n.id === updated.id);
+      if (idx !== -1) bulletinNotes[idx] = updated;
+      showToast('메모를 수정했습니다.');
+    } else {
+      const created = await fetchJSON('/api/bulletin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      });
+      bulletinNotes.unshift(created);
+      showToast('메모를 등록했습니다.');
+    }
+    cancelEditBulletin();
+    renderBulletinList();
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+async function deleteBulletinNoteHandler(id) {
+  if (!confirm('이 메모를 삭제할까요?')) return;
+  try {
+    await fetchJSON(`/api/bulletin/${id}`, { method: 'DELETE' });
+    bulletinNotes = bulletinNotes.filter(n => n.id !== id);
+    if (editingBulletinId === id) cancelEditBulletin();
+    renderBulletinList();
+    showToast('메모를 삭제했습니다.');
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
 // ---------- 모달 ----------
 const FORM_FIELD_IDS = ['fName', 'fAddress', 'fManager', 'fPhone', 'fMemo'];
 
@@ -1227,6 +1471,8 @@ function bindEvents() {
   el('tabClients').addEventListener('click', () => switchTab('clients'));
   el('tabSchedule').addEventListener('click', () => switchTab('schedule'));
   el('tabCalendar').addEventListener('click', () => switchTab('calendar'));
+  el('tabInventory').addEventListener('click', () => switchTab('inventory'));
+  el('tabBulletin').addEventListener('click', () => switchTab('bulletin'));
 
   // ---------- 차량 선택 이벤트 (오늘의 배차/달력 탭 공통) ----------
   document.querySelectorAll('.vehicle-btn').forEach(btn => {
@@ -1288,6 +1534,58 @@ function bindEvents() {
     calendarMonth = shiftMonth(calendarMonth, 1);
     loadCalendarMonth(calendarMonth);
   });
+
+  // ---------- 재고 관리 이벤트 ----------
+  el('inventoryAddBtn').addEventListener('click', openInventoryAddModal);
+  el('inventoryCancelBtn').addEventListener('click', closeInventoryModal);
+  el('inventoryModalOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'inventoryModalOverlay') closeInventoryModal();
+  });
+
+  el('inventoryForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const submitter = e.submitter;
+    const errorBox = el('inventoryFormError');
+    errorBox.classList.add('hidden');
+
+    const payload = {
+      name: el('invName').value.trim(),
+      quantity: Number(el('invQuantity').value),
+      unit: el('invUnit').value.trim(),
+      memo: el('invMemo').value.trim()
+    };
+
+    try {
+      if (submitter && submitter.id === 'inventoryDeleteBtn') {
+        if (!confirm('이 품목을 삭제할까요?')) return;
+        await fetchJSON(`/api/inventory/${editingInventoryId}`, { method: 'DELETE' });
+        showToast('품목을 삭제했습니다.');
+      } else if (editingInventoryId) {
+        await fetchJSON(`/api/inventory/${editingInventoryId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        showToast('품목 정보를 수정했습니다.');
+      } else {
+        await fetchJSON('/api/inventory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        showToast('신규 품목을 추가했습니다.');
+      }
+
+      closeInventoryModal();
+      await refreshInventory();
+    } catch (err) {
+      errorBox.textContent = err.message;
+      errorBox.classList.remove('hidden');
+    }
+  });
+
+  // ---------- 게시판식 메모 이벤트 ----------
+  el('bulletinSubmitBtn').addEventListener('click', submitBulletin);
 }
 
 init();
