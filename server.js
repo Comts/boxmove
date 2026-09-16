@@ -225,6 +225,17 @@ app.get('/api/vehicles', (req, res) => {
   res.json({ vehicles: VEHICLES });
 });
 
+// ---------- DB 용량 대략 확인 (Neon 무료 플랜은 프로젝트당 0.5GB 제한이라, 관리자 화면에 미리 표시) ----------
+const DB_FREE_TIER_LIMIT_BYTES = 0.5 * 1024 * 1024 * 1024; // 0.5GB
+app.get('/api/admin/db-usage', requireAdmin, asyncRoute(async (req, res) => {
+  const bytes = await db.getDatabaseSizeBytes();
+  res.json({
+    bytes,
+    limitBytes: DB_FREE_TIER_LIMIT_BYTES,
+    percent: Math.round((bytes / DB_FREE_TIER_LIMIT_BYTES) * 1000) / 10
+  });
+}));
+
 // ---------- 거래처 CRUD (모두 로그인 필요) ----------
 app.get('/api/clients', asyncRoute(async (req, res) => {
   res.json(await db.getAllClients());
