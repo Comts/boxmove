@@ -9,6 +9,13 @@ html, body {
   color: #1f2430;
 }
 
+/* body를 세로 flex로 두면, 관리자 전용 DB 용량 바처럼 topbar 아래에 줄이 늘어나도
+   .layout이 남은 공간을 정확히 채워서 화면 아래가 잘리지 않습니다. */
+body {
+  display: flex;
+  flex-direction: column;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -74,10 +81,56 @@ html, body {
   color: #b91c1c;
 }
 
+/* 관리자 전용: DB 용량(Neon 무료 플랜 0.5GB 기준) 대략 표시 */
+.db-usage-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px;
+  background: #f7f9fc;
+  border-bottom: 1px solid #eee;
+}
+
+.db-usage-bar.hidden {
+  display: none;
+}
+
+.db-usage-text {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #888;
+  white-space: nowrap;
+}
+
+.db-usage-track {
+  flex: 1;
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+  max-width: 200px;
+}
+
+.db-usage-fill {
+  height: 100%;
+  background: #1f6feb;
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.db-usage-fill.warn {
+  background: #f59e0b;
+}
+
+.db-usage-fill.danger {
+  background: #dc2626;
+}
+
 .layout {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 52px);
+  flex: 1;
+  min-height: 0;
 }
 
 .map {
