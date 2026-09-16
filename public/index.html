@@ -25,6 +25,7 @@
       <button id="tabSchedule" class="tab-btn">오늘의 배차</button>
       <button id="tabCalendar" class="tab-btn">달력</button>
       <button id="tabInventory" class="tab-btn">재고</button>
+      <button id="tabPallet" class="tab-btn">파렛트</button>
       <button id="tabBulletin" class="tab-btn">메모</button>
     </div>
 
@@ -84,6 +85,13 @@
       <ul id="inventoryList" class="inventory-list"></ul>
     </div>
 
+    <div id="palletView" class="hidden">
+      <div id="palletAddBox" class="pallet-add-box hidden">
+        <button id="palletAddBtn" class="btn primary" type="button">+ 거래처 추가</button>
+      </div>
+      <ul id="palletList" class="pallet-list"></ul>
+    </div>
+
     <div id="bulletinView" class="hidden">
       <div id="bulletinAddBox" class="bulletin-add-box hidden">
         <textarea id="bulletinInput" rows="2" placeholder="공지사항이나 메모를 입력하세요"></textarea>
@@ -139,6 +147,11 @@
       <label>수량 *
         <input id="invQuantity" type="number" required min="0" step="1" placeholder="예: 20" />
       </label>
+      <label>연결 거래처 (선택)
+        <select id="invClientId">
+          <option value="">연결 안 함</option>
+        </select>
+      </label>
       <label>단위
         <input id="invUnit" type="text" placeholder="예: 개, 박스, kg" />
       </label>
@@ -152,6 +165,66 @@
         <button type="button" id="inventoryCancelBtn" class="btn">취소</button>
         <button type="submit" id="inventoryDeleteBtn" class="btn danger hidden">삭제</button>
         <button type="submit" id="inventorySaveBtn" class="btn primary">저장</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 파렛트 관리 대상 거래처 추가/설정 모달 -->
+<div id="palletClientModalOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="palletClientModalTitle">파렛트 관리 거래처 추가</h2>
+    <form id="palletClientForm">
+      <label>거래처 *
+        <select id="palletClientSelect">
+          <option value="">거래처 선택...</option>
+        </select>
+      </label>
+      <label>파렛트 종류 1
+        <input id="palletType1Name" type="text" placeholder="예: KPP" />
+      </label>
+      <label>파렛트 종류 2 (선택)
+        <input id="palletType2Name" type="text" placeholder="예: 자체파렛트" />
+      </label>
+      <label>파렛트 종류 3 (선택)
+        <input id="palletType3Name" type="text" placeholder="비워두면 사용 안 함" />
+      </label>
+
+      <div id="palletClientFormError" class="form-error hidden"></div>
+
+      <div class="modal-actions">
+        <button type="button" id="palletClientCancelBtn" class="btn">취소</button>
+        <button type="submit" id="palletClientDeleteBtn" class="btn danger hidden">관리 대상에서 제외</button>
+        <button type="submit" id="palletClientSaveBtn" class="btn primary">저장</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 파렛트 입출고 기록 추가 모달 -->
+<div id="palletEntryModalOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="palletEntryModalTitle">파렛트 입출고 기록</h2>
+    <form id="palletEntryForm">
+      <div class="pallet-entry-direction">
+        <label><input type="radio" name="palletDirection" value="out" checked /> 출고 (거래처에 줌)</label>
+        <label><input type="radio" name="palletDirection" value="in" /> 입고 (거래처에서 회수)</label>
+      </div>
+      <label>수량 *
+        <input id="palletEntryQuantity" type="number" required min="1" step="1" placeholder="예: 10" />
+      </label>
+      <label>날짜 *
+        <input id="palletEntryDate" type="date" required />
+      </label>
+      <label>메모
+        <input id="palletEntryMemo" type="text" placeholder="예: 배송 건 관련" />
+      </label>
+
+      <div id="palletEntryFormError" class="form-error hidden"></div>
+
+      <div class="modal-actions">
+        <button type="button" id="palletEntryCancelBtn" class="btn">취소</button>
+        <button type="submit" class="btn primary">기록 추가</button>
       </div>
     </form>
   </div>
