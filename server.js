@@ -304,6 +304,14 @@ app.get('/api/inventory', asyncRoute(async (req, res) => {
   res.json(await db.getAllInventoryItems());
 }));
 
+// clientId가 있으면 실제 존재하는 거래처인지 확인합니다. 없으면(null/undefined/'') 미연결로 처리합니다.
+async function resolveOptionalClientId(rawClientId) {
+  if (!rawClientId || typeof rawClientId !== 'string') return null;
+  const client = await db.getClientById(rawClientId);
+  if (!client) throw new Error('연결하려는 거래처를 찾을 수 없습니다.');
+  return rawClientId;
+}
+
 app.post('/api/inventory', requireAdmin, asyncRoute(async (req, res) => {
   const name = sanitizeText(req.body?.name, 100);
   const unit = sanitizeText(req.body?.unit, 20);
@@ -317,7 +325,14 @@ app.post('/api/inventory', requireAdmin, asyncRoute(async (req, res) => {
     return res.status(400).json({ error: '수량은 0 이상의 정수로 입력해주세요.' });
   }
 
-  const newItem = await db.createInventoryItem({ id: genId(), name, quantity, unit, memo });
+  let clientId;
+  try {
+    clientId = await resolveOptionalClientId(req.body?.clientId);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  const newItem = await db.createInventoryItem({ id: genId(), name, quantity, unit, memo, clientId });
   res.status(201).json(newItem);
 }));
 
@@ -334,7 +349,14 @@ app.put('/api/inventory/:id', requireAdmin, asyncRoute(async (req, res) => {
     return res.status(400).json({ error: '수량은 0 이상의 정수로 입력해주세요.' });
   }
 
-  const updated = await db.updateInventoryItem(req.params.id, { name, quantity, unit, memo });
+  let clientId;
+  try {
+    clientId = await resolveOptionalClientId(req.body?.clientId);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  const updated = await db.updateInventoryItem(req.params.id, { name, quantity, unit, memo, clientId });
   if (!updated) return res.status(404).json({ error: '품목을 찾을 수 없습니다.' });
   res.json(updated);
 }));
@@ -384,6 +406,98 @@ app.put('/api/bulletin/:id', requireAdmin, asyncRoute(async (req, res) => {
 app.delete('/api/bulletin/:id', requireAdmin, asyncRoute(async (req, res) => {
   const deleted = await db.deleteBulletinNote(req.params.id);
   if (!deleted) return res.status(404).json({ error: '메모를 찾을 수 없습니다.' });
+  res.status(204).end();
+}));
+
+// ---------- 파렛트 관리 (파렛트를 신경써야 하는 거래처만 선택해서 관리, 조회는 모두·나머지는 관리자만) ----------
+const PALLET_DIRECTIONS = ['in', 'out'];
+function isValidPalletDirection(v) {
+  return typeof v === 'string' && PALLET_DIRECTIONS.includes(v);
+}
+
+app.get('/api/pallets', asyncRoute(async (req, res) => {
+  res.json(await db.getAllPalletClients());
+}));
+
+app.post('/api/pallets', requireAdmin, asyncRoute(async (req, res) => {
+  const clientId = req.body?.clientId;
+  if (typeof clientId !== 'string' || !clientId) {
+    return res.status(400).json({ error: '거래처를 선택해주세요.' });
+  }
+  const client = await db.getClientById(clientId);
+  if (!client) return res.status(400).json({ error: '거래처를 찾을 수 없습니다.' });
+
+  if (await db.isPalletClient(clientId)) {
+    return res.status(400).json({ error: '이미 파렛트 관리 대상으로 등록된 거래처입니다.' });
+  }
+
+  const type1Name = sanitizeText(req.body?.type1Name, 30) || '파렛트';
+  const type2Name = sanitizeText(req.body?.type2Name, 30);
+  const type3Name = sanitizeText(req.body?.type3Name, 30);
+
+  await db.createPalletClient({ clientId, type1Name, type2Name, type3Name });
+  res.status(201).json({ ok: true });
+}));
+
+app.put('/api/pallets/:clientId', requireAdmin, asyncRoute(async (req, res) => {
+  const type1Name = sanitizeText(req.body?.type1Name, 30) || '파렛트';
+  const type2Name = sanitizeText(req.body?.type2Name, 30);
+  const type3Name = sanitizeText(req.body?.type3Name, 30);
+
+  const updated = await db.updatePalletClientTypes(req.params.clientId, { type1Name, type2Name, type3Name });
+  if (!updated) return res.status(404).json({ error: '파렛트 관리 대상 거래처를 찾을 수 없습니다.' });
+  res.json({ ok: true });
+}));
+
+app.delete('/api/pallets/:clientId', requireAdmin, asyncRoute(async (req, res) => {
+  const deleted = await db.deletePalletClient(req.params.clientId);
+  if (!deleted) return res.status(404).json({ error: '파렛트 관리 대상 거래처를 찾을 수 없습니다.' });
+  res.status(204).end();
+}));
+
+app.get('/api/pallets/:clientId/entries', asyncRoute(async (req, res) => {
+  res.json(await db.getPalletEntries(req.params.clientId));
+}));
+
+app.post('/api/pallets/:clientId/entries', requireAdmin, asyncRoute(async (req, res) => {
+  const typeSlot = Number(req.body?.typeSlot);
+  const direction = req.body?.direction;
+  const quantity = Number(req.body?.quantity);
+  const date = req.body?.date;
+  const memo = sanitizeText(req.body?.memo, 200);
+
+  if (![1, 2, 3].includes(typeSlot)) {
+    return res.status(400).json({ error: '파렛트 종류가 올바르지 않습니다.' });
+  }
+  if (!isValidPalletDirection(direction)) {
+    return res.status(400).json({ error: '입고/출고 구분이 올바르지 않습니다.' });
+  }
+  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isInteger(quantity)) {
+    return res.status(400).json({ error: '수량은 1 이상의 정수로 입력해주세요.' });
+  }
+  if (!date || !DATE_PATTERN.test(date)) {
+    return res.status(400).json({ error: '날짜 형식이 올바르지 않습니다 (YYYY-MM-DD).' });
+  }
+
+  if (!(await db.isPalletClient(req.params.clientId))) {
+    return res.status(404).json({ error: '파렛트 관리 대상 거래처를 찾을 수 없습니다.' });
+  }
+
+  await db.createPalletEntry({
+    id: genId(),
+    clientId: req.params.clientId,
+    typeSlot,
+    direction,
+    quantity,
+    entryDate: date,
+    memo
+  });
+  res.status(201).json({ ok: true });
+}));
+
+app.delete('/api/pallets/entries/:entryId', requireAdmin, asyncRoute(async (req, res) => {
+  const deleted = await db.deletePalletEntry(req.params.entryId);
+  if (!deleted) return res.status(404).json({ error: '기록을 찾을 수 없습니다.' });
   res.status(204).end();
 }));
 
