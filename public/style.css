@@ -189,6 +189,7 @@ html, body {
 #scheduleView,
 #calendarView,
 #inventoryView,
+#palletView,
 #bulletinView {
   display: flex;
   flex-direction: column;
@@ -200,6 +201,7 @@ html, body {
 #scheduleView.hidden,
 #calendarView.hidden,
 #inventoryView.hidden,
+#palletView.hidden,
 #bulletinView.hidden {
   display: none;
 }
@@ -510,11 +512,14 @@ html, body {
 }
 
 .inventory-item {
+  padding: 12px 16px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.inventory-item-top {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #f0f0f0;
   cursor: pointer;
 }
 
@@ -532,6 +537,17 @@ html, body {
   font-size: 12px;
   color: #999;
   margin-top: 2px;
+}
+
+.inventory-client {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #1f6feb;
+  background: #eef5ff;
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-top: 4px;
 }
 
 .inventory-qty {
@@ -557,6 +573,20 @@ html, body {
   font-weight: 700;
   cursor: pointer;
   color: #1f6feb;
+}
+
+.inventory-deliver-btn {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #fff7ed;
+  color: #b45309;
 }
 
 /* 게시판식 메모 탭 */
@@ -625,6 +655,202 @@ html, body {
 .bulletin-item-actions button.remove-btn {
   background: #fee2e2;
   color: #b91c1c;
+}
+
+/* 파렛트 관리 탭 */
+.pallet-add-box {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.pallet-add-box.hidden {
+  display: none;
+}
+
+.pallet-add-box .btn {
+  width: 100%;
+}
+
+.pallet-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.pallet-client-card {
+  padding: 14px 16px;
+  border-bottom: 8px solid #f4f5f7;
+}
+
+.pallet-client-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pallet-client-name {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.pallet-settings-btn {
+  flex-shrink: 0;
+  border: none;
+  background: #f4f5f7;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  font-size: 14px;
+  cursor: pointer;
+  color: #666;
+}
+
+.pallet-types-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  overflow-x: auto;
+}
+
+.pallet-type-box {
+  flex: 1 1 0;
+  min-width: 90px;
+  background: #f7f9fc;
+  border-radius: 10px;
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.pallet-type-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+}
+
+.pallet-type-remaining {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1f6feb;
+  margin-top: 4px;
+}
+
+.pallet-type-add-btn {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  background: white;
+  color: #1f6feb;
+  border: 1px solid #dbe7fb;
+}
+
+.pallet-history-toggle {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  border: none;
+  background: none;
+  padding: 6px 0 0;
+  font-size: 12px;
+  color: #999;
+  cursor: pointer;
+}
+
+.pallet-history-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pallet-history-empty {
+  font-size: 12px;
+  color: #ccc;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.pallet-history-item {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  background: #f7f9fc;
+  border-radius: 8px;
+  padding: 6px 28px 6px 8px;
+  font-size: 11px;
+}
+
+.pallet-history-date {
+  color: #999;
+}
+
+.pallet-history-type {
+  font-weight: 600;
+  color: #444;
+}
+
+.pallet-history-direction {
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.pallet-history-direction.out {
+  background: #fff7ed;
+  color: #b45309;
+}
+
+.pallet-history-direction.in {
+  background: #eef5ff;
+  color: #1f6feb;
+}
+
+.pallet-history-qty {
+  font-weight: 600;
+}
+
+.pallet-history-memo {
+  color: #999;
+  width: 100%;
+}
+
+.pallet-history-delete-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  border: none;
+  background: transparent;
+  color: #bbb;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.pallet-entry-direction {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.pallet-entry-direction label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
 }
 
 /* 달력 탭 */
