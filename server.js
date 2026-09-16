@@ -202,10 +202,16 @@ function sanitizeText(value, maxLen) {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const MONTH_PATTERN = /^\d{4}-\d{2}$/;
 
-// 보유 차량 목록 (2대: 3.5t, 5t). 차량이 늘어나면 이 배열에만 추가하면 됩니다.
+// 보유 차량 목록 (2대: 3.5t, 5t) - 기사님 계정, "오늘의 배차" 탭에서 실제로 고르는 차량입니다.
+// 차량이 늘어나면 이 배열에만 추가하면 됩니다.
 const VEHICLES = ['3.5t', '5t'];
+// 달력 탭에서만 쓰는 추가 배차 줄입니다.
+// '기타': 평일 칸에서 3.5t/5t 외에 다른 방법으로 나가는 배차를 적는 세 번째 줄
+// '미정': 아직 날짜/차량을 정하지 못한 배차를 모아두는 용도(달력의 일요일 칸)
+const CALENDAR_ONLY_VEHICLES = ['기타', '미정'];
+const ALL_SCHEDULABLE_VEHICLES = [...VEHICLES, ...CALENDAR_ONLY_VEHICLES];
 function isValidVehicle(v) {
-  return typeof v === 'string' && VEHICLES.includes(v);
+  return typeof v === 'string' && ALL_SCHEDULABLE_VEHICLES.includes(v);
 }
 
 // ---------- 프론트엔드용 설정(공개 가능한 지도 클라이언트 ID만 전달) ----------
