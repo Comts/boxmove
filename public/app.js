@@ -21,7 +21,10 @@ let schedulePolyline = null;
 const AVG_SPEED_KMH = 30;
 
 // 달력 탭 상태 (지도 없이 날짜별 배차 목록만 보는 화면)
-// 달력 탭은 차량을 따로 고르지 않고 3.5t/5t을 한 화면에 반반 나눠서 동시에 보여줍니다.
+// 월~금은 3.5t/5t/기타 세 줄을 함께 보여주고, 토요일은 납품이 없어 아무것도 표시하지 않고,
+// 일요일은 차량 구분 없이 "미정"(아직 날짜/차량을 못 정한 배차) 하나만 크게 모아서 보여줍니다.
+const CALENDAR_WEEKDAY_VEHICLES = ['3.5t', '5t', '기타'];
+const UNSCHEDULED_VEHICLE = '미정';
 let calendarMonth = todayDateString().slice(0, 7); // 'YYYY-MM'
 let calendarSelectedDate = todayDateString();
 let calendarWeekDates = []; // 선택한 날짜가 속한 주(일~토) 7개 날짜
@@ -355,6 +358,34 @@ function populateScheduleAddSelect() {
   select.value = current || '';
 }
 
+// 상단에 "지금 몇 번째 목적지로 가고 있는지(예: 2/5)"와 다음 목적지 이름을 보여줍니다.
+// 완료 체크가 안 된 첫 항목을 "다음 목적지"로 보고, 그 항목의 순번을 분자로 씁니다.
+function updateScheduleProgress() {
+  const box = el('scheduleProgressBox');
+  if (!box) return;
+
+  if (scheduleItems.length === 0) {
+    box.classList.add('hidden');
+    return;
+  }
+
+  const total = scheduleItems.length;
+  const completedCount = scheduleItems.filter(it => !!it.completedAt).length;
+  const allDone = completedCount >= total;
+  const currentNumber = allDone ? total : completedCount + 1;
+
+  el('scheduleProgressCount').textContent = `${currentNumber}/${total}`;
+
+  const nextEl = el('scheduleProgressNext');
+  if (allDone) {
+    nextEl.textContent = '🎉 오늘 배차를 모두 완료했습니다';
+  } else {
+    nextEl.textContent = `다음 목적지: ${scheduleItems[completedCount].name}`;
+  }
+
+  box.classList.remove('hidden');
+}
+
 function renderScheduleList() {
   const isAdmin = currentRole === 'admin';
   const list = el('scheduleList');
@@ -369,6 +400,8 @@ function renderScheduleList() {
   } else {
     startedInfo.classList.add('hidden');
   }
+
+  updateScheduleProgress();
 
   if (scheduleItems.length === 0) {
     list.innerHTML = `<li class="empty-state">${scheduleDate} · ${selectedVehicle}에 등록된 배차가 없습니다.${isAdmin ? ' 위에서 거래처를 선택해 추가해주세요.' : ''}</li>`;
@@ -712,10 +745,19 @@ function getNextWeekDates(weekDates) {
   return weekDates.map(d => addDaysToDateStr(d, 7));
 }
 
-// 특정 날짜의 두 차량(3.5t, 5t) 배차를 한 번에 가져옵니다.
+// 요일에 따라 이 날짜 칸에 어떤 배차 줄을 보여줄지 정합니다.
+// 월~금: 3.5t/5t/기타 세 줄, 토요일: 납품이 없어 아예 없음, 일요일: "미정" 보관함 한 줄만.
+function vehiclesForDate(dateStr) {
+  const dow = new Date(dateStr + 'T00:00:00').getDay();
+  if (dow === 0) return [UNSCHEDULED_VEHICLE];
+  if (dow === 6) return [];
+  return CALENDAR_WEEKDAY_VEHICLES;
+}
+
+// 특정 날짜에 해당하는 줄(들)의 배차를 한 번에 가져옵니다.
 async function fetchDaySchedule(date) {
   const byVehicle = {};
-  await Promise.all(VEHICLES.map(async (vehicle) => {
+  await Promise.all(vehiclesForDate(date).map(async (vehicle) => {
     try {
       const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(vehicle)}`);
       byVehicle[vehicle] = data.items;
@@ -758,9 +800,10 @@ function buildWeekBlockNode(weekDates, labelText) {
 }
 
 // 주어진 주(일~토 7개 날짜)를 한 줄에 나란히 보여주는 영역을 만듭니다.
-// 실제 납품을 가지 않는 토/일요일은 좁게, 월~금은 넓게 표시합니다.
-// 각 날짜 칸 안에는 3.5t/5t 두 차량의 배차가 반씩 나뉘어 동시에 보이고,
-// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜(이번 주/다음 주 포함)나 다른 차량 칸으로 드래그해서 옮기는 것도 가능합니다.
+// 월~금은 3.5t/5t/기타 세 줄이 함께 보이고, 토요일은 납품이 없어 아무것도 안 보이고(좁게),
+// 일요일은 차량 구분 없이 "미정"(아직 날짜/차량 못 정한 배차) 하나만 넓게 모아서 보여줍니다.
+// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜(이번 주/다음 주, 일요일 미정 보관함 포함)나
+// 다른 차량 칸으로 드래그해서 옮기는 것도 가능합니다.
 function buildWeekStripNode(weekDates) {
   const strip = document.createElement('div');
   strip.className = 'cal-week-strip';
@@ -770,12 +813,14 @@ function buildWeekStripNode(weekDates) {
   const dowNames = ['일', '월', '화', '수', '목', '금', '토'];
 
   weekDates.forEach((dateStr, dowIndex) => {
-    const isWeekend = dowIndex === 0 || dowIndex === 6;
+    const isSaturday = dowIndex === 6;
+    const isSunday = dowIndex === 0;
     const dayNum = Number(dateStr.split('-')[2]);
 
     const col = document.createElement('div');
     col.className = 'cal-day-col'
-      + (isWeekend ? ' weekend' : '')
+      + (isSaturday ? ' saturday' : '')
+      + (isSunday ? ' sunday-unscheduled' : '')
       + (dateStr === today ? ' today' : '')
       + (dateStr === calendarSelectedDate ? ' selected-day' : '');
 
@@ -784,10 +829,22 @@ function buildWeekStripNode(weekDates) {
     header.innerHTML = `<span class="cal-day-dow">${dowNames[dowIndex]}</span><span class="cal-day-num">${dayNum}</span>`;
     col.appendChild(header);
 
-    // 차량 두 대(3.5t, 5t)를 한 칸 안에 반씩 나눠서 동시에 보여줍니다.
-    VEHICLES.forEach(vehicle => {
-      col.appendChild(buildDayVehicleSection(dateStr, vehicle, isAdmin));
-    });
+    if (isSaturday) {
+      // 토요일은 납품을 나가지 않으므로 배차 줄/추가 버튼 없이 비워둡니다.
+      const off = document.createElement('div');
+      off.className = 'cal-day-off-note';
+      off.textContent = '휴무';
+      col.appendChild(off);
+    } else if (isSunday) {
+      // 일요일은 차량 구분 없이 "미정" 보관함 하나만 크게 보여줍니다.
+      // 아직 날짜/차량을 못 정한 배차를 여기 등록해두고, 나중에 정해지면 실제 요일 칸으로 드래그해서 옮기면 됩니다.
+      col.appendChild(buildDayVehicleSection(dateStr, UNSCHEDULED_VEHICLE, isAdmin, '📋 미정 보관함'));
+    } else {
+      // 월~금은 3.5t/5t/기타 세 줄을 한 칸 안에 함께 보여줍니다.
+      CALENDAR_WEEKDAY_VEHICLES.forEach(vehicle => {
+        col.appendChild(buildDayVehicleSection(dateStr, vehicle, isAdmin));
+      });
+    }
 
     strip.appendChild(col);
   });
@@ -795,14 +852,15 @@ function buildWeekStripNode(weekDates) {
   return strip;
 }
 
-// 하루 칸 안에서 차량 한 대 분량(라벨 + 목록 + 검색해서 추가하는 입력창)을 만듭니다.
-function buildDayVehicleSection(dateStr, vehicle, isAdmin) {
+// 하루 칸 안에서 줄 한 개 분량(라벨 + 목록 + 검색해서 추가하는 입력창)을 만듭니다.
+// labelText를 따로 주지 않으면 vehicle 이름 그대로를 라벨로 씁니다(일요일 "미정" 보관함은 안내 문구를 따로 줍니다).
+function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
   const section = document.createElement('div');
   section.className = 'cal-vehicle-section';
 
   const label = document.createElement('div');
   label.className = 'cal-vehicle-label';
-  label.textContent = vehicle;
+  label.textContent = labelText || vehicle;
   section.appendChild(label);
 
   const dayData = calendarWeekData.get(dateStr) || { byVehicle: {} };
