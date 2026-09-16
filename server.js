@@ -299,6 +299,94 @@ app.delete('/api/clients/:id', requireAdmin, asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
+// ---------- 재고 관리 (회사 전체 공용 품목/수량, 조회는 모두 가능·등록/수정/삭제는 관리자만) ----------
+app.get('/api/inventory', asyncRoute(async (req, res) => {
+  res.json(await db.getAllInventoryItems());
+}));
+
+app.post('/api/inventory', requireAdmin, asyncRoute(async (req, res) => {
+  const name = sanitizeText(req.body?.name, 100);
+  const unit = sanitizeText(req.body?.unit, 20);
+  const memo = sanitizeText(req.body?.memo, 500);
+  const quantity = Number(req.body?.quantity);
+
+  if (!name) {
+    return res.status(400).json({ error: '품목명은 필수입니다.' });
+  }
+  if (!Number.isFinite(quantity) || quantity < 0 || !Number.isInteger(quantity)) {
+    return res.status(400).json({ error: '수량은 0 이상의 정수로 입력해주세요.' });
+  }
+
+  const newItem = await db.createInventoryItem({ id: genId(), name, quantity, unit, memo });
+  res.status(201).json(newItem);
+}));
+
+app.put('/api/inventory/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const name = sanitizeText(req.body?.name, 100);
+  const unit = sanitizeText(req.body?.unit, 20);
+  const memo = sanitizeText(req.body?.memo, 500);
+  const quantity = Number(req.body?.quantity);
+
+  if (!name) {
+    return res.status(400).json({ error: '품목명은 필수입니다.' });
+  }
+  if (!Number.isFinite(quantity) || quantity < 0 || !Number.isInteger(quantity)) {
+    return res.status(400).json({ error: '수량은 0 이상의 정수로 입력해주세요.' });
+  }
+
+  const updated = await db.updateInventoryItem(req.params.id, { name, quantity, unit, memo });
+  if (!updated) return res.status(404).json({ error: '품목을 찾을 수 없습니다.' });
+  res.json(updated);
+}));
+
+// 목록에서 +/- 버튼으로 수량만 빠르게 조정 (관리자만)
+app.patch('/api/inventory/:id/adjust', requireAdmin, asyncRoute(async (req, res) => {
+  const delta = Number(req.body?.delta);
+  if (!Number.isFinite(delta) || !Number.isInteger(delta) || delta === 0) {
+    return res.status(400).json({ error: 'delta(0이 아닌 정수)가 필요합니다.' });
+  }
+
+  const updated = await db.adjustInventoryQuantity(req.params.id, delta);
+  if (!updated) return res.status(404).json({ error: '품목을 찾을 수 없습니다.' });
+  res.json(updated);
+}));
+
+app.delete('/api/inventory/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const deleted = await db.deleteInventoryItem(req.params.id);
+  if (!deleted) return res.status(404).json({ error: '품목을 찾을 수 없습니다.' });
+  res.status(204).end();
+}));
+
+// ---------- 게시판식 메모 (회사 전체 공유, 조회는 모두 가능·작성/수정/삭제는 관리자만) ----------
+app.get('/api/bulletin', asyncRoute(async (req, res) => {
+  res.json(await db.getAllBulletinNotes());
+}));
+
+app.post('/api/bulletin', requireAdmin, asyncRoute(async (req, res) => {
+  const content = sanitizeText(req.body?.content, 1000);
+  if (!content) {
+    return res.status(400).json({ error: '내용을 입력해주세요.' });
+  }
+  const newNote = await db.createBulletinNote({ id: genId(), content, author: req.session.username || '' });
+  res.status(201).json(newNote);
+}));
+
+app.put('/api/bulletin/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const content = sanitizeText(req.body?.content, 1000);
+  if (!content) {
+    return res.status(400).json({ error: '내용을 입력해주세요.' });
+  }
+  const updated = await db.updateBulletinNote(req.params.id, content);
+  if (!updated) return res.status(404).json({ error: '메모를 찾을 수 없습니다.' });
+  res.json(updated);
+}));
+
+app.delete('/api/bulletin/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const deleted = await db.deleteBulletinNote(req.params.id);
+  if (!deleted) return res.status(404).json({ error: '메모를 찾을 수 없습니다.' });
+  res.status(204).end();
+}));
+
 // ---------- 배차 일정 (날짜 + 차량마다 어떤 거래처를 어떤 순서로, 언제 갔는지) ----------
 // 같은 거래처(예: 우리 회사 주소)가 하루에 여러 번 나올 수 있어서, 각 배차 항목은
 // itemId라는 고유 값으로 구분합니다 (거래처 id가 같아도 상관없음).
