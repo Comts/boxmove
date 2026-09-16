@@ -4,11 +4,18 @@ let clients = [];
 let editingId = null;
 let currentRole = null; // 'admin' | 'viewer'
 let currentVehicle = null; // 기사님 계정일 때 본인이 모는 차량('3.5t'|'5t'). 관리자는 null(제한 없음)
-let activeTab = 'clients'; // 'clients' | 'schedule' | 'calendar' | 'inventory' | 'bulletin'
+let activeTab = 'clients'; // 'clients' | 'schedule' | 'calendar' | 'inventory' | 'pallet' | 'bulletin'
 
 // 재고 관리 상태 (회사 전체 공용 품목/수량, 관리자만 등록·수정·삭제·수량조정 가능)
 let inventoryItems = [];
 let editingInventoryId = null;
+
+// 파렛트 관리 상태 (파렛트를 신경써야 하는 거래처만 선택해서 관리, 거래처별 최대 3종류)
+let palletClients = [];
+let editingPalletClientId = null; // 거래처 추가/설정 모달에서 수정 중인 거래처 id (신규 추가면 null)
+let palletEntryContext = null; // 입출고 기록 모달에서 대상 {clientId, typeSlot}
+let palletHistoryCache = new Map(); // clientId -> 최근 조회한 입출고 이력 배열 (펼쳐볼 때만 불러옴)
+let expandedPalletClientIds = new Set(); // 이력을 펼쳐서 보고 있는 거래처 id 목록
 
 // 게시판식 메모 상태 (회사 전체 공유, 관리자만 작성·수정·삭제 가능)
 let bulletinNotes = [];
@@ -81,6 +88,7 @@ function applyRoleUI() {
   el('addBtn').classList.toggle('hidden', !isAdmin);
   el('scheduleAddBox').classList.toggle('hidden', !isAdmin);
   el('inventoryAddBox').classList.toggle('hidden', !isAdmin);
+  el('palletAddBox').classList.toggle('hidden', !isAdmin);
   el('bulletinAddBox').classList.toggle('hidden', !isAdmin);
   // 기사님 계정은 본인 차량으로 고정이라 차량 전환 버튼 자체가 필요 없습니다 (관리자만 전환 가능).
   const vehicleSwitcher = el('vehicleSwitcher');
@@ -161,6 +169,8 @@ async function refreshClients() {
   if (activeTab === 'clients') renderMarkers();
   renderList();
   populateScheduleAddSelect();
+  populateInventoryClientSelect();
+  populatePalletClientSelect();
 }
 
 function clearMarkers() {
@@ -269,15 +279,18 @@ function switchTab(tab) {
   el('tabSchedule').classList.toggle('active', tab === 'schedule');
   el('tabCalendar').classList.toggle('active', tab === 'calendar');
   el('tabInventory').classList.toggle('active', tab === 'inventory');
+  el('tabPallet').classList.toggle('active', tab === 'pallet');
   el('tabBulletin').classList.toggle('active', tab === 'bulletin');
   el('clientsView').classList.toggle('hidden', tab !== 'clients');
   el('scheduleView').classList.toggle('hidden', tab !== 'schedule');
   el('calendarView').classList.toggle('hidden', tab !== 'calendar');
   el('inventoryView').classList.toggle('hidden', tab !== 'inventory');
+  el('palletView').classList.toggle('hidden', tab !== 'pallet');
   el('bulletinView').classList.toggle('hidden', tab !== 'bulletin');
 
-  // 달력/재고/메모 탭은 지도 없이 목록만 보여줍니다.
-  el('layout').classList.toggle('no-map', tab === 'calendar' || tab === 'inventory' || tab === 'bulletin');
+  // 달력/재고/파렛트/메모 탭은 지도 없이 목록만 보여줍니다.
+  const noMapTabs = ['calendar', 'inventory', 'pallet', 'bulletin'];
+  el('layout').classList.toggle('no-map', noMapTabs.includes(tab));
 
   if (tab === 'clients') {
     renderMarkers();
@@ -289,6 +302,8 @@ function switchTab(tab) {
     selectCalendarDate(calendarSelectedDate);
   } else if (tab === 'inventory') {
     refreshInventory();
+  } else if (tab === 'pallet') {
+    refreshPallets();
   } else if (tab === 'bulletin') {
     refreshBulletin();
   }
@@ -1144,6 +1159,20 @@ async function saveDayNote(date, vehicle, itemId, note) {
 }
 
 // ---------- 재고 관리 (회사 전체 공용, 품목별 수량) ----------
+function populateInventoryClientSelect() {
+  const select = el('invClientId');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">연결 안 함</option>';
+  clients.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name;
+    select.appendChild(opt);
+  });
+  select.value = current || '';
+}
+
 async function refreshInventory() {
   try {
     inventoryItems = await fetchJSON('/api/inventory');
@@ -1167,9 +1196,12 @@ function renderInventoryList() {
     const li = document.createElement('li');
     li.className = 'inventory-item';
 
-    li.innerHTML = `
+    const top = document.createElement('div');
+    top.className = 'inventory-item-top';
+    top.innerHTML = `
       <div class="inventory-item-info">
         <div class="name">${escapeHtml(item.name)}</div>
+        ${item.clientName ? `<div class="inventory-client">🏢 ${escapeHtml(item.clientName)}</div>` : ''}
         ${item.memo ? `<div class="memo">${escapeHtml(item.memo)}</div>` : ''}
       </div>
       <div class="inventory-qty">${item.quantity}${escapeHtml(item.unit)}</div>
@@ -1197,7 +1229,22 @@ function renderInventoryList() {
 
       actions.appendChild(minusBtn);
       actions.appendChild(plusBtn);
-      li.appendChild(actions);
+      top.appendChild(actions);
+    }
+
+    li.appendChild(top);
+
+    // 거래처가 연결된 품목은, 관리자가 바로 오늘 배차(달력의 "기타" 줄)에 그 거래처를 추가할 수 있습니다.
+    if (isAdmin && item.clientId) {
+      const deliverBtn = document.createElement('button');
+      deliverBtn.type = 'button';
+      deliverBtn.className = 'inventory-deliver-btn';
+      deliverBtn.textContent = '🚚 납품추가 (오늘 · 기타)';
+      deliverBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        addInventoryClientToTodaySchedule(item.clientId, item.clientName);
+      });
+      li.appendChild(deliverBtn);
     }
 
     li.addEventListener('click', () => openInventoryModal(item));
@@ -1220,13 +1267,32 @@ async function adjustInventoryQuantity(id, delta) {
   }
 }
 
+// 재고 화면의 "납품추가" 버튼: 연결된 거래처를 오늘 날짜의 "기타" 배차 줄에 추가합니다.
+// (달력 탭에서 직접 추가하는 것과 동일한 방식으로, 오늘 날짜+"기타" 차량의 배차 목록에 끝에 붙입니다.)
+async function addInventoryClientToTodaySchedule(clientId, clientName) {
+  const today = todayDateString();
+  try {
+    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(today)}&vehicle=${encodeURIComponent('기타')}`);
+    const items = data.items.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' }));
+    items.push({ itemId: null, clientId, note: '' });
+    await fetchJSON(`/api/schedule?date=${encodeURIComponent(today)}&vehicle=${encodeURIComponent('기타')}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items })
+    });
+    showToast(`오늘(${today}) 배차의 "기타" 줄에 ${clientName}을(를) 추가했습니다.`);
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
 function openInventoryAddModal() {
   if (currentRole !== 'admin') return; // 방어적 체크 (버튼은 이미 숨겨져 있음)
   editingInventoryId = null;
   el('inventoryModalTitle').textContent = '신규 품목 추가';
   el('inventoryForm').reset();
   el('invId').value = '';
-  ['invName', 'invQuantity', 'invUnit', 'invMemo'].forEach(id => { el(id).disabled = false; });
+  ['invName', 'invQuantity', 'invClientId', 'invUnit', 'invMemo'].forEach(id => { el(id).disabled = false; });
   el('inventoryDeleteBtn').classList.add('hidden');
   el('inventorySaveBtn').classList.remove('hidden');
   el('inventoryFormError').classList.add('hidden');
@@ -1240,9 +1306,10 @@ function openInventoryModal(item) {
   el('invId').value = item.id;
   el('invName').value = item.name;
   el('invQuantity').value = item.quantity;
+  el('invClientId').value = item.clientId || '';
   el('invUnit').value = item.unit || '';
   el('invMemo').value = item.memo || '';
-  ['invName', 'invQuantity', 'invUnit', 'invMemo'].forEach(id => { el(id).disabled = !isAdmin; });
+  ['invName', 'invQuantity', 'invClientId', 'invUnit', 'invMemo'].forEach(id => { el(id).disabled = !isAdmin; });
   el('inventoryDeleteBtn').classList.toggle('hidden', !isAdmin);
   el('inventorySaveBtn').classList.toggle('hidden', !isAdmin);
   el('inventoryFormError').classList.add('hidden');
@@ -1251,6 +1318,224 @@ function openInventoryModal(item) {
 
 function closeInventoryModal() {
   el('inventoryModalOverlay').classList.add('hidden');
+}
+
+// ---------- 파렛트 관리 (파렛트를 신경써야 하는 거래처만 선택해서 관리) ----------
+// 거래처별로 파렛트 종류를 최대 3가지까지 이름 붙여 따로 관리하고, 종류별 남은 수량은
+// 입출고 이력의 합계로 자동 계산됩니다 (출고: 거래처에 줌 → 잔여 증가, 입고: 회수 → 잔여 감소).
+function populatePalletClientSelect() {
+  const select = el('palletClientSelect');
+  if (!select) return;
+  const current = select.value;
+  const managedIds = new Set(palletClients.map(pc => pc.clientId));
+  select.innerHTML = '<option value="">거래처 선택...</option>';
+  clients.forEach(c => {
+    // 이미 관리 중인 거래처는 새로 추가할 때 목록에서 빼되, 지금 수정 중인 거래처 본인은 계속 보여줍니다.
+    if (managedIds.has(c.id) && c.id !== editingPalletClientId) return;
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name;
+    select.appendChild(opt);
+  });
+  select.value = current || '';
+}
+
+async function refreshPallets() {
+  try {
+    palletClients = await fetchJSON('/api/pallets');
+    renderPalletList();
+    populatePalletClientSelect();
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+function renderPalletList() {
+  const isAdmin = currentRole === 'admin';
+  const list = el('palletList');
+  list.innerHTML = '';
+
+  if (palletClients.length === 0) {
+    list.innerHTML = `<li class="empty-state">파렛트 관리 대상 거래처가 없습니다.${isAdmin ? ' 위에서 거래처를 추가해주세요.' : ''}</li>`;
+    return;
+  }
+
+  palletClients.forEach(pc => {
+    const li = document.createElement('li');
+    li.className = 'pallet-client-card';
+
+    const header = document.createElement('div');
+    header.className = 'pallet-client-header';
+    header.innerHTML = `<div class="pallet-client-name">${escapeHtml(pc.clientName)}</div>`;
+
+    if (isAdmin) {
+      const settingsBtn = document.createElement('button');
+      settingsBtn.type = 'button';
+      settingsBtn.className = 'pallet-settings-btn';
+      settingsBtn.textContent = '⚙';
+      settingsBtn.addEventListener('click', () => openPalletClientEditModal(pc));
+      header.appendChild(settingsBtn);
+    }
+
+    li.appendChild(header);
+
+    const typesRow = document.createElement('div');
+    typesRow.className = 'pallet-types-row';
+
+    pc.types.forEach(t => {
+      const box = document.createElement('div');
+      box.className = 'pallet-type-box';
+      box.innerHTML = `
+        <div class="pallet-type-name">${escapeHtml(t.name)}</div>
+        <div class="pallet-type-remaining">${t.remaining}개</div>
+      `;
+
+      if (isAdmin) {
+        const addBtn = document.createElement('button');
+        addBtn.type = 'button';
+        addBtn.className = 'pallet-type-add-btn';
+        addBtn.textContent = '+ 입출고';
+        addBtn.addEventListener('click', () => openPalletEntryModal(pc.clientId, t.slot, t.name, pc.clientName));
+        box.appendChild(addBtn);
+      }
+
+      typesRow.appendChild(box);
+    });
+
+    li.appendChild(typesRow);
+
+    const historyToggle = document.createElement('button');
+    historyToggle.type = 'button';
+    historyToggle.className = 'pallet-history-toggle';
+    const isExpanded = expandedPalletClientIds.has(pc.clientId);
+    historyToggle.textContent = isExpanded ? '이력 숨기기 ▲' : '이력 보기 ▼';
+    historyToggle.addEventListener('click', () => togglePalletHistory(pc.clientId));
+    li.appendChild(historyToggle);
+
+    if (isExpanded) {
+      const historyList = document.createElement('ul');
+      historyList.className = 'pallet-history-list';
+      const entries = palletHistoryCache.get(pc.clientId) || [];
+
+      if (entries.length === 0) {
+        const empty = document.createElement('li');
+        empty.className = 'pallet-history-empty';
+        empty.textContent = '입출고 기록이 없습니다.';
+        historyList.appendChild(empty);
+      } else {
+        entries.forEach(entry => {
+          const typeInfo = pc.types.find(t => t.slot === entry.typeSlot);
+          const typeName = typeInfo ? typeInfo.name : `종류${entry.typeSlot}`;
+          const entryLi = document.createElement('li');
+          entryLi.className = 'pallet-history-item';
+          entryLi.innerHTML = `
+            <span class="pallet-history-date">${escapeHtml(entry.entryDate)}</span>
+            <span class="pallet-history-type">${escapeHtml(typeName)}</span>
+            <span class="pallet-history-direction ${entry.direction}">${entry.direction === 'out' ? '출고' : '입고'}</span>
+            <span class="pallet-history-qty">${entry.quantity}개</span>
+            ${entry.memo ? `<span class="pallet-history-memo">${escapeHtml(entry.memo)}</span>` : ''}
+          `;
+
+          if (isAdmin) {
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'pallet-history-delete-btn';
+            delBtn.textContent = '×';
+            delBtn.addEventListener('click', () => deletePalletEntryHandler(entry.id, pc.clientId));
+            entryLi.appendChild(delBtn);
+          }
+
+          historyList.appendChild(entryLi);
+        });
+      }
+
+      li.appendChild(historyList);
+    }
+
+    list.appendChild(li);
+  });
+}
+
+async function loadPalletHistory(clientId) {
+  try {
+    const entries = await fetchJSON(`/api/pallets/${clientId}/entries`);
+    palletHistoryCache.set(clientId, entries);
+  } catch (err) {
+    showToast(err.message);
+    palletHistoryCache.set(clientId, []);
+  }
+}
+
+async function togglePalletHistory(clientId) {
+  if (expandedPalletClientIds.has(clientId)) {
+    expandedPalletClientIds.delete(clientId);
+    renderPalletList();
+    return;
+  }
+  expandedPalletClientIds.add(clientId);
+  await loadPalletHistory(clientId);
+  renderPalletList();
+}
+
+function openPalletClientAddModal() {
+  if (currentRole !== 'admin') return; // 방어적 체크 (버튼은 이미 숨겨져 있음)
+  editingPalletClientId = null;
+  el('palletClientModalTitle').textContent = '파렛트 관리 거래처 추가';
+  el('palletClientForm').reset();
+  el('palletClientSelect').disabled = false;
+  el('palletClientDeleteBtn').classList.add('hidden');
+  el('palletClientFormError').classList.add('hidden');
+  populatePalletClientSelect();
+  el('palletClientModalOverlay').classList.remove('hidden');
+}
+
+function openPalletClientEditModal(pc) {
+  if (currentRole !== 'admin') return;
+  editingPalletClientId = pc.clientId;
+  el('palletClientModalTitle').textContent = '파렛트 종류 설정';
+  el('palletClientSelect').innerHTML = `<option value="${pc.clientId}">${escapeHtml(pc.clientName)}</option>`;
+  el('palletClientSelect').value = pc.clientId;
+  el('palletClientSelect').disabled = true; // 이미 등록된 거래처는 바꿀 수 없고 종류 이름만 수정합니다.
+  const findType = slot => (pc.types.find(t => t.slot === slot) || {}).name || '';
+  el('palletType1Name').value = findType(1);
+  el('palletType2Name').value = findType(2);
+  el('palletType3Name').value = findType(3);
+  el('palletClientDeleteBtn').classList.remove('hidden');
+  el('palletClientFormError').classList.add('hidden');
+  el('palletClientModalOverlay').classList.remove('hidden');
+}
+
+function closePalletClientModal() {
+  el('palletClientModalOverlay').classList.add('hidden');
+}
+
+function openPalletEntryModal(clientId, typeSlot, typeName, clientName) {
+  if (currentRole !== 'admin') return;
+  palletEntryContext = { clientId, typeSlot };
+  el('palletEntryModalTitle').textContent = `${clientName} · ${typeName} 입출고`;
+  el('palletEntryForm').reset();
+  el('palletEntryDate').value = todayDateString();
+  const outRadio = document.querySelector('input[name="palletDirection"][value="out"]');
+  if (outRadio) outRadio.checked = true;
+  el('palletEntryFormError').classList.add('hidden');
+  el('palletEntryModalOverlay').classList.remove('hidden');
+}
+
+function closePalletEntryModal() {
+  palletEntryContext = null;
+  el('palletEntryModalOverlay').classList.add('hidden');
+}
+
+async function deletePalletEntryHandler(entryId, clientId) {
+  if (!confirm('이 기록을 삭제할까요?')) return;
+  try {
+    await fetchJSON(`/api/pallets/entries/${entryId}`, { method: 'DELETE' });
+    await loadPalletHistory(clientId);
+    await refreshPallets();
+    showToast('기록을 삭제했습니다.');
+  } catch (err) {
+    showToast(err.message);
+  }
 }
 
 // ---------- 게시판식 메모 (회사 전체 공유) ----------
@@ -1472,6 +1757,7 @@ function bindEvents() {
   el('tabSchedule').addEventListener('click', () => switchTab('schedule'));
   el('tabCalendar').addEventListener('click', () => switchTab('calendar'));
   el('tabInventory').addEventListener('click', () => switchTab('inventory'));
+  el('tabPallet').addEventListener('click', () => switchTab('pallet'));
   el('tabBulletin').addEventListener('click', () => switchTab('bulletin'));
 
   // ---------- 차량 선택 이벤트 (오늘의 배차/달력 탭 공통) ----------
@@ -1551,6 +1837,7 @@ function bindEvents() {
     const payload = {
       name: el('invName').value.trim(),
       quantity: Number(el('invQuantity').value),
+      clientId: el('invClientId').value || null,
       unit: el('invUnit').value.trim(),
       memo: el('invMemo').value.trim()
     };
@@ -1578,6 +1865,104 @@ function bindEvents() {
 
       closeInventoryModal();
       await refreshInventory();
+    } catch (err) {
+      errorBox.textContent = err.message;
+      errorBox.classList.remove('hidden');
+    }
+  });
+
+  // ---------- 파렛트 관리 이벤트 ----------
+  el('palletAddBtn').addEventListener('click', openPalletClientAddModal);
+  el('palletClientCancelBtn').addEventListener('click', closePalletClientModal);
+  el('palletClientModalOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'palletClientModalOverlay') closePalletClientModal();
+  });
+
+  el('palletClientForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const submitter = e.submitter;
+    const errorBox = el('palletClientFormError');
+    errorBox.classList.add('hidden');
+
+    try {
+      if (submitter && submitter.id === 'palletClientDeleteBtn') {
+        if (!confirm('이 거래처를 파렛트 관리 대상에서 제외할까요? 입출고 기록도 함께 삭제됩니다.')) return;
+        await fetchJSON(`/api/pallets/${editingPalletClientId}`, { method: 'DELETE' });
+        expandedPalletClientIds.delete(editingPalletClientId);
+        palletHistoryCache.delete(editingPalletClientId);
+        showToast('파렛트 관리 대상에서 제외했습니다.');
+      } else {
+        const typePayload = {
+          type1Name: el('palletType1Name').value.trim(),
+          type2Name: el('palletType2Name').value.trim(),
+          type3Name: el('palletType3Name').value.trim()
+        };
+
+        if (editingPalletClientId) {
+          await fetchJSON(`/api/pallets/${editingPalletClientId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(typePayload)
+          });
+          showToast('파렛트 종류를 수정했습니다.');
+        } else {
+          const clientId = el('palletClientSelect').value;
+          if (!clientId) {
+            errorBox.textContent = '거래처를 선택해주세요.';
+            errorBox.classList.remove('hidden');
+            return;
+          }
+          await fetchJSON('/api/pallets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clientId, ...typePayload })
+          });
+          showToast('파렛트 관리 대상으로 추가했습니다.');
+        }
+      }
+
+      closePalletClientModal();
+      await refreshPallets();
+    } catch (err) {
+      errorBox.textContent = err.message;
+      errorBox.classList.remove('hidden');
+    }
+  });
+
+  el('palletEntryCancelBtn').addEventListener('click', closePalletEntryModal);
+  el('palletEntryModalOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'palletEntryModalOverlay') closePalletEntryModal();
+  });
+
+  el('palletEntryForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!palletEntryContext) return;
+    const errorBox = el('palletEntryFormError');
+    errorBox.classList.add('hidden');
+
+    const directionInput = document.querySelector('input[name="palletDirection"]:checked');
+    const payload = {
+      typeSlot: palletEntryContext.typeSlot,
+      direction: directionInput ? directionInput.value : 'out',
+      quantity: Number(el('palletEntryQuantity').value),
+      date: el('palletEntryDate').value,
+      memo: el('palletEntryMemo').value.trim()
+    };
+
+    try {
+      const clientId = palletEntryContext.clientId;
+      await fetchJSON(`/api/pallets/${clientId}/entries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      closePalletEntryModal();
+      await refreshPallets();
+      if (expandedPalletClientIds.has(clientId)) {
+        await loadPalletHistory(clientId);
+        renderPalletList();
+      }
+      showToast('입출고 기록을 추가했습니다.');
     } catch (err) {
       errorBox.textContent = err.message;
       errorBox.classList.remove('hidden');
