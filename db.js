@@ -70,6 +70,30 @@ async function initDb() {
       FOREIGN KEY (date, vehicle) REFERENCES schedule_days(date, vehicle) ON DELETE CASCADE
     );
   `);
+
+  // 재고 관리: 회사 전체가 공유하는 품목별 수량 (거래처별이 아니라 회사 전체 재고 1개)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS inventory_items (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      quantity INT NOT NULL DEFAULT 0,
+      unit TEXT DEFAULT '',
+      memo TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // 게시판식 메모: 회사 전체가 공유해서 보는 공지/메모 (관리자만 작성, 누구나 조회)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bulletin_notes (
+      id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      author TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
 
 function rowToClient(row) {
@@ -234,19 +258,117 @@ async function setItemNote(itemId, note) {
   return rowCount > 0 ? note : undefined;
 }
 
-// 달력 화면에서 각 날짜에 배차가 몇 건 있는지(차량별로) 표시하기 위한 월별 집계
+// 달력 화면에서 각 날짜에 배차가 몇 건 있는지 표시하기 위한 월별 집계
 // monthPrefix 예: '2026-09' -> 'YYYY-MM-DD'가 이 문자열로 시작하는 날짜들을 집계
+// vehicle을 생략하면 모든 차량을 합친 건수를 반환합니다 (달력 탭은 차량 구분 없이 한번에 보여주므로).
 async function getScheduleCountsForMonth(monthPrefix, vehicle) {
-  const { rows } = await pool.query(
-    `SELECT date, COUNT(*)::int AS cnt
-     FROM schedule_items
-     WHERE date LIKE $1 AND vehicle = $2
-     GROUP BY date`,
-    [`${monthPrefix}%`, vehicle]
-  );
+  const params = [`${monthPrefix}%`];
+  let sql = 'SELECT date, COUNT(*)::int AS cnt FROM schedule_items WHERE date LIKE $1';
+  if (vehicle) {
+    sql += ' AND vehicle = $2';
+    params.push(vehicle);
+  }
+  sql += ' GROUP BY date';
+
+  const { rows } = await pool.query(sql, params);
   const counts = {};
   rows.forEach(row => { counts[row.date] = row.cnt; });
   return counts;
+}
+
+// ---------- 재고 관리 (회사 전체 공용, 품목별 수량) ----------
+function rowToInventoryItem(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    quantity: row.quantity,
+    unit: row.unit || '',
+    memo: row.memo || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+async function getAllInventoryItems() {
+  const { rows } = await pool.query('SELECT * FROM inventory_items ORDER BY created_at ASC');
+  return rows.map(rowToInventoryItem);
+}
+
+async function createInventoryItem(item) {
+  const { rows } = await pool.query(
+    `INSERT INTO inventory_items (id, name, quantity, unit, memo)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [item.id, item.name, item.quantity, item.unit, item.memo]
+  );
+  return rowToInventoryItem(rows[0]);
+}
+
+async function updateInventoryItem(id, fields) {
+  const { rows } = await pool.query(
+    `UPDATE inventory_items
+     SET name = $2, quantity = $3, unit = $4, memo = $5, updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [id, fields.name, fields.quantity, fields.unit, fields.memo]
+  );
+  return rows[0] ? rowToInventoryItem(rows[0]) : null;
+}
+
+// 목록 화면에서 +/- 버튼으로 수량만 빠르게 조정할 때 씁니다. 0 밑으로는 내려가지 않습니다.
+async function adjustInventoryQuantity(id, delta) {
+  const { rows } = await pool.query(
+    `UPDATE inventory_items
+     SET quantity = GREATEST(quantity + $2, 0), updated_at = now()
+     WHERE id = $1
+     RETURNING *`,
+    [id, delta]
+  );
+  return rows[0] ? rowToInventoryItem(rows[0]) : null;
+}
+
+async function deleteInventoryItem(id) {
+  const { rowCount } = await pool.query('DELETE FROM inventory_items WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
+// ---------- 게시판식 메모 (회사 전체 공용) ----------
+function rowToBulletinNote(row) {
+  return {
+    id: row.id,
+    content: row.content,
+    author: row.author || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+async function getAllBulletinNotes() {
+  const { rows } = await pool.query('SELECT * FROM bulletin_notes ORDER BY created_at DESC');
+  return rows.map(rowToBulletinNote);
+}
+
+async function createBulletinNote(note) {
+  const { rows } = await pool.query(
+    `INSERT INTO bulletin_notes (id, content, author)
+     VALUES ($1, $2, $3)
+     RETURNING *`,
+    [note.id, note.content, note.author]
+  );
+  return rowToBulletinNote(rows[0]);
+}
+
+async function updateBulletinNote(id, content) {
+  const { rows } = await pool.query(
+    `UPDATE bulletin_notes SET content = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+    [id, content]
+  );
+  return rows[0] ? rowToBulletinNote(rows[0]) : null;
+}
+
+async function deleteBulletinNote(id) {
+  const { rowCount } = await pool.query('DELETE FROM bulletin_notes WHERE id = $1', [id]);
+  return rowCount > 0;
 }
 
 module.exports = {
@@ -262,5 +384,14 @@ module.exports = {
   startSchedule,
   setItemCompleted,
   setItemNote,
-  getScheduleCountsForMonth
+  getScheduleCountsForMonth,
+  getAllInventoryItems,
+  createInventoryItem,
+  updateInventoryItem,
+  adjustInventoryQuantity,
+  deleteInventoryItem,
+  getAllBulletinNotes,
+  createBulletinNote,
+  updateBulletinNote,
+  deleteBulletinNote
 };
