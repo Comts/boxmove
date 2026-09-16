@@ -24,6 +24,8 @@
       <button id="tabClients" class="tab-btn">전체 거래처</button>
       <button id="tabSchedule" class="tab-btn">오늘의 배차</button>
       <button id="tabCalendar" class="tab-btn">달력</button>
+      <button id="tabInventory" class="tab-btn">재고</button>
+      <button id="tabBulletin" class="tab-btn">메모</button>
     </div>
 
     <div id="clientsView">
@@ -74,6 +76,21 @@
 
       <div id="calGrid" class="cal-grid"></div>
     </div>
+
+    <div id="inventoryView" class="hidden">
+      <div id="inventoryAddBox" class="inventory-add-box hidden">
+        <button id="inventoryAddBtn" class="btn primary" type="button">+ 품목 추가</button>
+      </div>
+      <ul id="inventoryList" class="inventory-list"></ul>
+    </div>
+
+    <div id="bulletinView" class="hidden">
+      <div id="bulletinAddBox" class="bulletin-add-box hidden">
+        <textarea id="bulletinInput" rows="2" placeholder="공지사항이나 메모를 입력하세요"></textarea>
+        <button id="bulletinSubmitBtn" class="btn primary" type="button">등록</button>
+      </div>
+      <ul id="bulletinList" class="bulletin-list"></ul>
+    </div>
   </section>
 </main>
 
@@ -105,6 +122,36 @@
         <button type="button" id="cancelBtn" class="btn">취소</button>
         <button type="submit" id="deleteBtn" class="btn danger hidden">삭제</button>
         <button type="submit" id="saveBtn" class="btn primary">저장</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- 신규/수정 재고 품목 모달 -->
+<div id="inventoryModalOverlay" class="modal-overlay hidden">
+  <div class="modal">
+    <h2 id="inventoryModalTitle">신규 품목 추가</h2>
+    <form id="inventoryForm">
+      <input type="hidden" id="invId" />
+      <label>품목명 *
+        <input id="invName" type="text" required placeholder="예: 파렛트" />
+      </label>
+      <label>수량 *
+        <input id="invQuantity" type="number" required min="0" step="1" placeholder="예: 20" />
+      </label>
+      <label>단위
+        <input id="invUnit" type="text" placeholder="예: 개, 박스, kg" />
+      </label>
+      <label>메모
+        <textarea id="invMemo" rows="2" placeholder="보관 위치, 주의사항 등"></textarea>
+      </label>
+
+      <div id="inventoryFormError" class="form-error hidden"></div>
+
+      <div class="modal-actions">
+        <button type="button" id="inventoryCancelBtn" class="btn">취소</button>
+        <button type="submit" id="inventoryDeleteBtn" class="btn danger hidden">삭제</button>
+        <button type="submit" id="inventorySaveBtn" class="btn primary">저장</button>
       </div>
     </form>
   </div>
