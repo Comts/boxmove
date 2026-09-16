@@ -504,6 +504,13 @@ async function deletePalletEntry(id) {
   return rowCount > 0;
 }
 
+// 현재 DB(Postgres) 전체 용량(바이트). Neon 무료 플랜은 프로젝트당 0.5GB로 제한되어 있어서,
+// 관리자 화면에 대략적인 사용량을 보여줘서 미리 알아챌 수 있게 합니다.
+async function getDatabaseSizeBytes() {
+  const { rows } = await pool.query('SELECT pg_database_size(current_database()) AS bytes');
+  return Number(rows[0].bytes);
+}
+
 module.exports = {
   pool,
   initDb,
@@ -534,5 +541,6 @@ module.exports = {
   isPalletClient,
   getPalletEntries,
   createPalletEntry,
-  deletePalletEntry
+  deletePalletEntry,
+  getDatabaseSizeBytes
 };
