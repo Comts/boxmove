@@ -83,6 +83,9 @@ async function initDb() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // 품목을 특정 거래처와 연결해두면(선택 사항), 재고 화면에서 바로 "납품추가"로
+  // 오늘 날짜 배차(달력의 "기타" 줄)에 그 거래처를 추가할 수 있습니다.
+  await pool.query(`ALTER TABLE inventory_items ADD COLUMN IF NOT EXISTS client_id TEXT REFERENCES clients(id) ON DELETE SET NULL;`);
 
   // 게시판식 메모: 회사 전체가 공유해서 보는 공지/메모 (관리자만 작성, 누구나 조회)
   await pool.query(`
@@ -92,6 +95,34 @@ async function initDb() {
       author TEXT DEFAULT '',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // 파렛트 관리: 파렛트를 신경써야 하는 거래처만 골라서 관리합니다.
+  // 거래처마다 파렛트 종류를 최대 3가지까지 이름 붙여 따로 관리합니다(예: KPP, 자체파렛트 등).
+  // 빈 문자열이면 그 슬롯은 사용하지 않는 것으로 취급합니다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pallet_clients (
+      client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+      type1_name TEXT NOT NULL DEFAULT '파렛트',
+      type2_name TEXT DEFAULT '',
+      type3_name TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // 파렛트 입출고 기록(이력). 거래처에 파렛트를 줄 때(출고)는 남은 수량이 늘고,
+  // 거래처에서 회수할 때(입고)는 남은 수량이 줄어듭니다. 남은 수량은 이 이력의 합으로 계산합니다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pallet_entries (
+      id TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL REFERENCES pallet_clients(client_id) ON DELETE CASCADE,
+      type_slot INT NOT NULL,
+      direction TEXT NOT NULL,
+      quantity INT NOT NULL,
+      entry_date TEXT NOT NULL,
+      memo TEXT DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
 }
@@ -284,22 +315,29 @@ function rowToInventoryItem(row) {
     quantity: row.quantity,
     unit: row.unit || '',
     memo: row.memo || '',
+    clientId: row.client_id || null,
+    clientName: row.client_name || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
 }
 
 async function getAllInventoryItems() {
-  const { rows } = await pool.query('SELECT * FROM inventory_items ORDER BY created_at ASC');
+  const { rows } = await pool.query(`
+    SELECT i.*, c.name AS client_name
+    FROM inventory_items i
+    LEFT JOIN clients c ON c.id = i.client_id
+    ORDER BY i.created_at ASC
+  `);
   return rows.map(rowToInventoryItem);
 }
 
 async function createInventoryItem(item) {
   const { rows } = await pool.query(
-    `INSERT INTO inventory_items (id, name, quantity, unit, memo)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO inventory_items (id, name, quantity, unit, memo, client_id)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [item.id, item.name, item.quantity, item.unit, item.memo]
+    [item.id, item.name, item.quantity, item.unit, item.memo, item.clientId || null]
   );
   return rowToInventoryItem(rows[0]);
 }
@@ -307,10 +345,10 @@ async function createInventoryItem(item) {
 async function updateInventoryItem(id, fields) {
   const { rows } = await pool.query(
     `UPDATE inventory_items
-     SET name = $2, quantity = $3, unit = $4, memo = $5, updated_at = now()
+     SET name = $2, quantity = $3, unit = $4, memo = $5, client_id = $6, updated_at = now()
      WHERE id = $1
      RETURNING *`,
-    [id, fields.name, fields.quantity, fields.unit, fields.memo]
+    [id, fields.name, fields.quantity, fields.unit, fields.memo, fields.clientId || null]
   );
   return rows[0] ? rowToInventoryItem(rows[0]) : null;
 }
@@ -371,6 +409,101 @@ async function deleteBulletinNote(id) {
   return rowCount > 0;
 }
 
+// ---------- 파렛트 관리 (파렛트를 신경써야 하는 거래처만 선택해서 관리) ----------
+// 거래처별로 최대 3가지 파렛트 종류를 따로 관리하고, 종류별 남은 수량은
+// 그 종류의 입출고 이력 합계로 계산합니다 (출고 - 입고 = 현재 거래처에 나가있는 수량).
+async function getAllPalletClients() {
+  const { rows } = await pool.query(`
+    SELECT
+      pc.client_id,
+      c.name AS client_name,
+      c.address AS client_address,
+      pc.type1_name, pc.type2_name, pc.type3_name,
+      COALESCE(SUM(CASE WHEN pe.type_slot = 1 AND pe.direction = 'out' THEN pe.quantity
+                         WHEN pe.type_slot = 1 AND pe.direction = 'in' THEN -pe.quantity ELSE 0 END), 0)::int AS type1_remaining,
+      COALESCE(SUM(CASE WHEN pe.type_slot = 2 AND pe.direction = 'out' THEN pe.quantity
+                         WHEN pe.type_slot = 2 AND pe.direction = 'in' THEN -pe.quantity ELSE 0 END), 0)::int AS type2_remaining,
+      COALESCE(SUM(CASE WHEN pe.type_slot = 3 AND pe.direction = 'out' THEN pe.quantity
+                         WHEN pe.type_slot = 3 AND pe.direction = 'in' THEN -pe.quantity ELSE 0 END), 0)::int AS type3_remaining
+    FROM pallet_clients pc
+    JOIN clients c ON c.id = pc.client_id
+    LEFT JOIN pallet_entries pe ON pe.client_id = pc.client_id
+    GROUP BY pc.client_id, c.name, c.address, pc.type1_name, pc.type2_name, pc.type3_name
+    ORDER BY c.name ASC
+  `);
+
+  return rows.map(row => ({
+    clientId: row.client_id,
+    clientName: row.client_name,
+    clientAddress: row.client_address,
+    types: [
+      { slot: 1, name: row.type1_name || '', remaining: row.type1_remaining },
+      { slot: 2, name: row.type2_name || '', remaining: row.type2_remaining },
+      { slot: 3, name: row.type3_name || '', remaining: row.type3_remaining }
+    ].filter(t => t.name) // 이름이 없는 슬롯은 사용하지 않는 것으로 취급
+  }));
+}
+
+async function createPalletClient({ clientId, type1Name, type2Name, type3Name }) {
+  const { rows } = await pool.query(
+    `INSERT INTO pallet_clients (client_id, type1_name, type2_name, type3_name)
+     VALUES ($1, $2, $3, $4)
+     RETURNING *`,
+    [clientId, type1Name || '파렛트', type2Name || '', type3Name || '']
+  );
+  return rows[0];
+}
+
+async function updatePalletClientTypes(clientId, { type1Name, type2Name, type3Name }) {
+  const { rows } = await pool.query(
+    `UPDATE pallet_clients SET type1_name = $2, type2_name = $3, type3_name = $4
+     WHERE client_id = $1
+     RETURNING *`,
+    [clientId, type1Name || '파렛트', type2Name || '', type3Name || '']
+  );
+  return rows[0] || null;
+}
+
+async function deletePalletClient(clientId) {
+  const { rowCount } = await pool.query('DELETE FROM pallet_clients WHERE client_id = $1', [clientId]);
+  return rowCount > 0;
+}
+
+async function isPalletClient(clientId) {
+  const { rows } = await pool.query('SELECT 1 FROM pallet_clients WHERE client_id = $1', [clientId]);
+  return rows.length > 0;
+}
+
+async function getPalletEntries(clientId) {
+  const { rows } = await pool.query(
+    'SELECT * FROM pallet_entries WHERE client_id = $1 ORDER BY entry_date DESC, created_at DESC',
+    [clientId]
+  );
+  return rows.map(row => ({
+    id: row.id,
+    clientId: row.client_id,
+    typeSlot: row.type_slot,
+    direction: row.direction,
+    quantity: row.quantity,
+    entryDate: row.entry_date,
+    memo: row.memo || '',
+    createdAt: row.created_at
+  }));
+}
+
+async function createPalletEntry(entry) {
+  await pool.query(
+    `INSERT INTO pallet_entries (id, client_id, type_slot, direction, quantity, entry_date, memo)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [entry.id, entry.clientId, entry.typeSlot, entry.direction, entry.quantity, entry.entryDate, entry.memo]
+  );
+}
+
+async function deletePalletEntry(id) {
+  const { rowCount } = await pool.query('DELETE FROM pallet_entries WHERE id = $1', [id]);
+  return rowCount > 0;
+}
+
 module.exports = {
   pool,
   initDb,
@@ -393,5 +526,13 @@ module.exports = {
   getAllBulletinNotes,
   createBulletinNote,
   updateBulletinNote,
-  deleteBulletinNote
+  deleteBulletinNote,
+  getAllPalletClients,
+  createPalletClient,
+  updatePalletClientTypes,
+  deletePalletClient,
+  isPalletClient,
+  getPalletEntries,
+  createPalletEntry,
+  deletePalletEntry
 };
