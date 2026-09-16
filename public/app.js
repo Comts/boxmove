@@ -78,9 +78,34 @@ async function init() {
 
   applyRoleUI();
   applyVehicleUI();
+  if (currentRole === 'admin') refreshDbUsage();
 
   // 기사님 계정은 로그인하면 바로 본인 차량의 오늘의 배차 화면부터 보여줍니다.
   switchTab(currentRole === 'viewer' ? 'schedule' : 'clients');
+}
+
+// 관리자 전용: Neon 무료 플랜(0.5GB) 대비 현재 DB 용량을 topbar 아래에 표시합니다.
+// 용량이 부족해지기 전에 미리 알아챌 수 있도록 하는 참고용 표시라, 실패해도 조용히 무시합니다.
+async function refreshDbUsage() {
+  try {
+    const usage = await fetchJSON('/api/admin/db-usage');
+    const usedMb = usage.bytes / (1024 * 1024);
+    const limitMb = usage.limitBytes / (1024 * 1024);
+    const percent = Math.min(usage.percent, 100);
+
+    el('dbUsageText').textContent =
+      `💾 DB 사용량 ${usedMb < 1 ? usedMb.toFixed(2) : usedMb.toFixed(1)}MB / ${limitMb.toFixed(0)}MB (${usage.percent}%)`;
+
+    const fill = el('dbUsageFill');
+    fill.style.width = `${percent}%`;
+    fill.classList.toggle('warn', usage.percent >= 70 && usage.percent < 90);
+    fill.classList.toggle('danger', usage.percent >= 90);
+
+    el('dbUsageBar').classList.remove('hidden');
+  } catch (err) {
+    // 사용량 표시는 부가 기능이라 실패해도 화면 전체에 영향 주지 않습니다.
+    el('dbUsageBar').classList.add('hidden');
+  }
 }
 
 function applyRoleUI() {
