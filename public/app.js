@@ -1004,6 +1004,18 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
     });
   }
 
+  section.appendChild(listEl);
+
+  // 미정 보관함은 항목을 하나씩 드래그하지 않고, 다음 주 일요일로 한꺼번에 옮길 수 있는 버튼을 둡니다.
+  if (vehicle === UNSCHEDULED_VEHICLE && isAdmin && items.length > 0) {
+    const moveAllBtn = document.createElement('button');
+    moveAllBtn.type = 'button';
+    moveAllBtn.className = 'cal-move-all-btn';
+    moveAllBtn.textContent = `▶ 다음 주로 ${items.length}건 모두 이동`;
+    moveAllBtn.addEventListener('click', () => moveAllUnscheduledToNextWeek(dateStr));
+    section.appendChild(moveAllBtn);
+  }
+
   // 목록의 빈 공간(항목이 없는 날, 또는 맨 끝)에 놓아도 추가/이동되도록 목록 자체도 드롭 대상으로 둡니다.
   if (isAdmin) {
     listEl.addEventListener('dragover', (e) => {
@@ -1017,8 +1029,6 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
       moveDraggedItem(dateStr, vehicle, items.length);
     });
   }
-
-  section.appendChild(listEl);
 
   if (isAdmin) {
     section.appendChild(buildAddControl(dateStr, vehicle));
@@ -1161,6 +1171,43 @@ async function addDayItem(date, vehicle, clientId) {
   renderCalendarGrid();
   await saveDayVehicleOrder(date, vehicle);
   showToast('배차 목록에 추가했습니다.');
+}
+
+// 미정 보관함(일요일 칸)에 쌓인 배차를 하나씩 드래그하지 않고, 다음 주 일요일 미정 보관함으로 한 번에 옮깁니다.
+// (다음 주 미정 보관함에 이미 있는 항목 뒤에 이어 붙이고, 원래 있던 주의 미정 보관함은 비웁니다.)
+async function moveAllUnscheduledToNextWeek(dateStr) {
+  const dayData = calendarWeekData.get(dateStr);
+  const items = (dayData && dayData.byVehicle && dayData.byVehicle[UNSCHEDULED_VEHICLE]) || [];
+  if (items.length === 0) return;
+
+  const targetDate = addDaysToDateStr(dateStr, 7);
+  if (!confirm(`미정 보관함의 ${items.length}건을 전부 다음 주 일요일(${targetDate})로 옮길까요?`)) return;
+
+  try {
+    const targetData = await fetchJSON(`/api/schedule?date=${encodeURIComponent(targetDate)}&vehicle=${encodeURIComponent(UNSCHEDULED_VEHICLE)}`);
+    const mergedItems = [
+      ...targetData.items.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })),
+      ...items.map(it => ({ itemId: null, clientId: it.id, note: it.note || '' }))
+    ];
+
+    await fetchJSON(`/api/schedule?date=${encodeURIComponent(targetDate)}&vehicle=${encodeURIComponent(UNSCHEDULED_VEHICLE)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: mergedItems })
+    });
+
+    await fetchJSON(`/api/schedule?date=${encodeURIComponent(dateStr)}&vehicle=${encodeURIComponent(UNSCHEDULED_VEHICLE)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [] })
+    });
+
+    await loadCalendarWeek();
+    await loadCalendarMonth(calendarMonth);
+    showToast(`${items.length}건을 다음 주(${targetDate})로 옮겼습니다.`);
+  } catch (err) {
+    showToast(err.message);
+  }
 }
 
 async function saveDayNote(date, vehicle, itemId, note) {
