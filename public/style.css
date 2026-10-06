@@ -1055,7 +1055,7 @@ body {
 
 .cal-day-col {
   flex: 1 1 0;
-  min-width: 76px;
+  min-width: 150px;
   background: #fafafa;
   border-radius: 7px;
   padding: 4px 3px;
@@ -1082,8 +1082,8 @@ body {
 
 /* 일요일은 차량 구분 없이 "미정" 보관함 하나만 넓게 표시 (등록해두고 나중에 실제 요일로 옮기기 편하도록) */
 .cal-day-col.sunday-unscheduled {
-  flex: 1.4 1 0;
-  min-width: 108px;
+  flex: 0.7 1 0;
+  min-width: 84px;
   background: #fff7ed;
   border: 1px dashed #f59e0b;
 }
@@ -1325,6 +1325,34 @@ body {
 .cal-vehicle-section:first-of-type {
   padding-top: 0;
   border-top: none;
+}
+
+/* 3.5t(왼쪽) / 5t(오른쪽) 나란히 */
+.cal-vehicle-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  align-items: start;
+}
+
+.cal-vehicle-pair > .cal-vehicle-section {
+  min-width: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.cal-vehicle-pair > .cal-vehicle-section + .cal-vehicle-section {
+  border-left: 1px dashed #e5e7eb;
+  padding-left: 4px;
+}
+
+.cal-vehicle-pair .cal-day-add-results {
+  min-width: 190px;
+}
+
+.cal-vehicle-pair > .cal-vehicle-section + .cal-vehicle-section .cal-day-add-results {
+  left: auto;
+  right: 0;
 }
 
 .cal-vehicle-label {
