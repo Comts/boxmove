@@ -59,7 +59,53 @@ function todayDateString() {
   return `${y}-${m}-${day}`;
 }
 
+// 화면 크기 조절 (TV처럼 브라우저가 가상 해상도를 크게 잡는 기기에서 전체를 줄여 볼 수 있게 함, 기기별로 저장)
+const UI_ZOOM_STEPS = [0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.15, 1.3];
+let uiZoom = 1;
+
+function loadUiZoom() {
+  try {
+    const v = Number(localStorage.getItem('uiZoom'));
+    if (UI_ZOOM_STEPS.includes(v)) return v;
+  } catch (e) { /* 저장소를 못 쓰는 환경이면 기본값 */ }
+  return 1;
+}
+
+// zoom을 걸면 height:100%가 원하는 높이로 안 잡히므로, 화면 높이를 zoom으로 나눈 px로 직접 지정합니다.
+function fitBodyHeight() {
+  if (uiZoom === 1) {
+    document.documentElement.style.height = '';
+    document.body.style.height = '';
+  } else {
+    document.documentElement.style.height = 'auto';
+    document.body.style.height = (window.innerHeight / uiZoom) + 'px';
+  }
+}
+
+function applyUiZoom() {
+  document.documentElement.style.zoom = uiZoom === 1 ? '' : String(uiZoom);
+  fitBodyHeight();
+  const label = el('zoomLabel');
+  if (label) label.textContent = `${Math.round(uiZoom * 100)}%`;
+  window.dispatchEvent(new Event('resize')); // 지도 등이 크기를 다시 계산하도록
+}
+
+function stepUiZoom(direction) {
+  const idx = UI_ZOOM_STEPS.indexOf(uiZoom);
+  const next = UI_ZOOM_STEPS[Math.max(0, Math.min(UI_ZOOM_STEPS.length - 1, idx + direction))];
+  if (next === uiZoom) return;
+  uiZoom = next;
+  try { localStorage.setItem('uiZoom', String(uiZoom)); } catch (e) { /* 무시 */ }
+  applyUiZoom();
+}
+
 async function init() {
+  uiZoom = loadUiZoom();
+  applyUiZoom();
+  el('zoomOutBtn').addEventListener('click', () => stepUiZoom(-1));
+  el('zoomInBtn').addEventListener('click', () => stepUiZoom(1));
+  window.addEventListener('resize', fitBodyHeight);
+
   const me = await fetchJSON('/api/me');
   currentRole = me.role;
   currentVehicle = me.vehicle || null;
