@@ -43,6 +43,30 @@ body {
   font-size: 13px;
 }
 
+/* 화면 크기 조절(A−/A+): TV처럼 큰 화면용이라 좁은 화면(폰)에서는 숨깁니다 */
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.zoom-controls .btn {
+  padding: 8px 10px;
+}
+
+.zoom-label {
+  font-size: 11px;
+  min-width: 36px;
+  text-align: center;
+  opacity: 0.85;
+}
+
+@media (max-width: 899px) {
+  .zoom-controls {
+    display: none;
+  }
+}
+
 .role-badge {
   display: inline-block;
   font-size: 11px;
@@ -1174,7 +1198,7 @@ body {
 }
 
 .cal-day-item-name {
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
