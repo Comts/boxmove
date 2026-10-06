@@ -81,13 +81,22 @@
     </div>
 
     <div id="calendarView" class="hidden">
-      <div class="cal-month-nav">
-        <button id="calPrevMonth" class="btn" type="button">‹</button>
-        <div id="calMonthLabel" class="cal-month-label"></div>
-        <button id="calNextMonth" class="btn" type="button">›</button>
-      </div>
+      <div class="cal-scroll">
+        <div class="cal-rolling-bar">
+          <button id="calTodayBtn" class="btn" type="button">오늘</button>
+          <div id="calRangeLabel" class="cal-range-label"></div>
+        </div>
 
-      <div id="calGrid" class="cal-grid"></div>
+        <div id="calRolling" class="cal-rolling"></div>
+
+        <div class="cal-month-nav">
+          <button id="calPrevMonth" class="btn" type="button">‹</button>
+          <div id="calMonthLabel" class="cal-month-label"></div>
+          <button id="calNextMonth" class="btn" type="button">›</button>
+        </div>
+
+        <div id="calGrid" class="cal-grid"></div>
+      </div>
     </div>
 
     <div id="inventoryView" class="hidden">
