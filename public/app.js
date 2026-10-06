@@ -944,10 +944,14 @@ function buildWeekStripNode(weekDates) {
       // 아직 날짜/차량을 못 정한 배차를 여기 등록해두고, 나중에 정해지면 실제 요일 칸으로 드래그해서 옮기면 됩니다.
       col.appendChild(buildDayVehicleSection(dateStr, UNSCHEDULED_VEHICLE, isAdmin, '📋 미정 보관함'));
     } else {
-      // 월~금은 3.5t/5t/기타 세 줄을 한 칸 안에 함께 보여줍니다.
-      CALENDAR_WEEKDAY_VEHICLES.forEach(vehicle => {
-        col.appendChild(buildDayVehicleSection(dateStr, vehicle, isAdmin));
+      // 월~금은 3.5t(왼쪽)/5t(오른쪽)를 나란히 두고, 그 아래에 기타를 한 줄로 보여줍니다.
+      const pair = document.createElement('div');
+      pair.className = 'cal-vehicle-pair';
+      VEHICLES.forEach(vehicle => {
+        pair.appendChild(buildDayVehicleSection(dateStr, vehicle, isAdmin));
       });
+      col.appendChild(pair);
+      col.appendChild(buildDayVehicleSection(dateStr, '기타', isAdmin));
     }
 
     strip.appendChild(col);
