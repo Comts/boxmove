@@ -947,12 +947,68 @@ body {
   text-align: center;
 }
 
-.cal-grid {
+/* 달력 탭 전체 스크롤 영역: 위 = 오늘 기준 이어보기 배차, 아래 = 월 달력 */
+.cal-scroll {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.cal-rolling-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eee;
+}
+
+.cal-rolling-bar .btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: #1f6feb;
+  color: white;
+  font-weight: 600;
+}
+
+.cal-range-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #444;
+}
+
+.cal-rolling {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px;
+}
+
+.cal-rolling-rows {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 왼쪽 고정 "미정" 보관함 (예전 일요일 칸 자리, 날짜가 넘어가도 계속 남아있음) */
+.cal-unscheduled-col {
+  flex: 0 0 110px;
+  min-width: 110px;
+  background: #fff7ed;
+  border: 1px dashed #f59e0b;
+  border-radius: 8px;
+  padding: 5px 4px;
+}
+
+.cal-unscheduled-col .cal-vehicle-label {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.cal-grid {
   display: flex;
   flex-direction: column;
   padding: 5px;
-  overflow-y: auto;
 }
 
 .cal-dow-row,
