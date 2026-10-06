@@ -41,8 +41,10 @@ const AVG_SPEED_KMH = 30;
 const CALENDAR_WEEKDAY_VEHICLES = ['3.5t', '5t', '기타'];
 const UNSCHEDULED_VEHICLE = '미정';
 let calendarMonth = todayDateString().slice(0, 7); // 'YYYY-MM'
-let calendarSelectedDate = todayDateString();
-let calendarWeekDates = []; // 선택한 날짜가 속한 주(일~토) 7개 날짜
+let calendarSelectedDate = todayDateString(); // 위쪽 배차 화면이 "이 날짜부터" 이어서 보여주는 기준일 (기본: 오늘)
+let calendarFollowToday = true; // true면 날짜가 바뀔 때(TV를 켜둔 채 자정이 지나도) 자동으로 오늘 기준으로 넘어갑니다
+// "미정" 보관함은 날짜와 상관없이 항상 한 곳에 모아두므로, 서버에는 이 고정 날짜로 저장합니다.
+const UNSCHEDULED_DATE = '2000-01-01';
 let calendarWeekData = new Map(); // date -> { byVehicle: { '3.5t': [...], '5t': [...] } }
 let calendarCounts = {}; // { 'YYYY-MM-DD': 건수(전체 차량 합계) }
 let calDragIndex = null;
@@ -767,9 +769,58 @@ function buildMonthWeeks(year, month) {
   return weeks;
 }
 
-// 달력 그리드: 선택한 날짜가 속한 주(週)만 그 자리에서 바로 아래로 펼쳐져 배차 내용을 보여주고,
-// 다른 주를 선택하면 그 주는 접히고 새로 선택한 주가 펼쳐집니다.
+// 위쪽 "이어 보기" 배차 화면 + 아래쪽 월 달력을 함께 다시 그립니다.
 function renderCalendarGrid() {
+  renderCalendarRolling();
+  renderCalendarMonthGrid();
+}
+
+// 요일 칸은 월·화·수·목·금으로 항상 고정이고, 숫자(날짜)만 기준일 이후의 가장 가까운 그 요일로 채웁니다.
+// 예) 화요일 6일 기준 → 첫 줄: 월12 화6 수7 목8 금9 / 둘째 줄: 월19 화13 수14 목15 금16
+// 앞 5개가 첫 줄, 뒤 5개가 둘째 줄(다음 주)입니다. 지난 요일은 자동으로 다음 주 날짜로 넘어갑니다.
+function getRollingDates(anchorDate) {
+  const anchorDow = new Date(anchorDate + 'T00:00:00').getDay();
+  const firstRow = [1, 2, 3, 4, 5].map(dow => addDaysToDateStr(anchorDate, (dow - anchorDow + 7) % 7));
+  const secondRow = firstRow.map(d => addDaysToDateStr(d, 7));
+  return [...firstRow, ...secondRow];
+}
+
+// 줄 안 날짜들 중 가장 이른 날 ~ 가장 늦은 날을 "6/6(화) ~ 12/12(월)" 형태로 보여줍니다.
+function formatDateRange(dates) {
+  const sorted = [...dates].sort();
+  return `${formatShortDate(sorted[0])} ~ ${formatShortDate(sorted[sorted.length - 1])}`;
+}
+
+function formatShortDate(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  return `${d.getMonth() + 1}/${d.getDate()}(${['일', '월', '화', '수', '목', '금', '토'][d.getDay()]})`;
+}
+
+function renderCalendarRolling() {
+  const root = el('calRolling');
+  root.innerHTML = '';
+
+  const dates = getRollingDates(calendarSelectedDate);
+  const isAdmin = currentRole === 'admin';
+  const isToday = calendarSelectedDate === todayDateString();
+  el('calRangeLabel').textContent = `${formatDateRange(dates)}${isToday ? ' · 오늘 기준' : ''}`;
+
+  // 왼쪽: 날짜가 바뀌어도 계속 남아있는 "미정" 보관함 (예전 일요일 칸 자리)
+  const unscheduledCol = document.createElement('div');
+  unscheduledCol.className = 'cal-unscheduled-col';
+  unscheduledCol.appendChild(buildDayVehicleSection(UNSCHEDULED_DATE, UNSCHEDULED_VEHICLE, isAdmin, '📋 미정 보관함'));
+  root.appendChild(unscheduledCol);
+
+  // 오른쪽: 월~금 고정 요일 칸 2줄 (첫 줄 = 기준일 이후 가장 가까운 월~금, 둘째 줄 = 그 다음 주)
+  const rows = document.createElement('div');
+  rows.className = 'cal-rolling-rows';
+  rows.appendChild(buildWeekBlockNode(dates.slice(0, 5), formatDateRange(dates.slice(0, 5))));
+  rows.appendChild(buildWeekBlockNode(dates.slice(5, 10), formatDateRange(dates.slice(5, 10))));
+  root.appendChild(rows);
+}
+
+// 월 달력(날짜를 눌러 그날부터 이어서 보기). 기준일부터 보여주는 12일 범위는 옅게 표시합니다.
+function renderCalendarMonthGrid() {
   const grid = el('calGrid');
   grid.innerHTML = '';
 
@@ -788,6 +839,7 @@ function renderCalendarGrid() {
 
   const weeks = buildMonthWeeks(year, month);
   const today = todayDateString();
+  const rollingDates = new Set(getRollingDates(calendarSelectedDate));
 
   weeks.forEach(week => {
     const weekRow = document.createElement('div');
@@ -799,6 +851,7 @@ function renderCalendarGrid() {
 
       if (dateStr) {
         if (dateStr === today) cell.classList.add('today');
+        if (rollingDates.has(dateStr)) cell.classList.add('in-week');
         if (dateStr === calendarSelectedDate) cell.classList.add('selected');
 
         const count = calendarCounts[dateStr] || 0;
@@ -806,36 +859,19 @@ function renderCalendarGrid() {
           <div class="cal-date-num">${Number(dateStr.split('-')[2])}</div>
           ${count > 0 ? `<div class="cal-count-badge">${count}건</div>` : ''}
         `;
-        cell.addEventListener('click', () => selectCalendarDate(dateStr));
+        cell.addEventListener('click', () => {
+          calendarFollowToday = (dateStr === todayDateString());
+          selectCalendarDate(dateStr);
+          const scroller = document.querySelector('.cal-scroll');
+          if (scroller) scroller.scrollTop = 0; // 고른 날짜부터 이어지는 배차를 바로 위에서 볼 수 있게
+        });
       }
 
       weekRow.appendChild(cell);
     });
 
     grid.appendChild(weekRow);
-
-    // 선택한 날짜가 이 주(週)에 있으면, 이 행 바로 아래에 이번 주 + 다음 주 배차 내용을 함께 펼쳐서 보여줍니다.
-    if (week.includes(calendarSelectedDate)) {
-      const nextWeekDates = getNextWeekDates(calendarWeekDates);
-      grid.appendChild(buildWeekBlockNode(calendarWeekDates, '이번 주'));
-      grid.appendChild(buildWeekBlockNode(nextWeekDates, '다음 주'));
-    }
   });
-}
-
-// 특정 날짜가 속한 주(일요일~토요일) 7개 날짜를 구합니다.
-function getWeekDates(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  const dow = d.getDay();
-  const sunday = new Date(d);
-  sunday.setDate(d.getDate() - dow);
-  const result = [];
-  for (let i = 0; i < 7; i++) {
-    const day = new Date(sunday);
-    day.setDate(sunday.getDate() + i);
-    result.push(dateStringFrom(day));
-  }
-  return result;
 }
 
 function addDaysToDateStr(dateStr, days) {
@@ -844,17 +880,11 @@ function addDaysToDateStr(dateStr, days) {
   return dateStringFrom(d);
 }
 
-// weekDates(일~토 7개)를 그대로 7일 뒤로 밀어서 "다음 주"의 일~토 7개 날짜를 구합니다.
-function getNextWeekDates(weekDates) {
-  return weekDates.map(d => addDaysToDateStr(d, 7));
-}
-
 // 요일에 따라 이 날짜 칸에 어떤 배차 줄을 보여줄지 정합니다.
-// 월~금: 3.5t/5t/기타 세 줄, 토요일: 납품이 없어 아예 없음, 일요일: "미정" 보관함 한 줄만.
+// 월~금: 3.5t/5t/기타, 토요일: 납품이 없어 아예 없음 (일요일은 날짜 칸 없이 왼쪽 "미정" 보관함이 대신합니다).
 function vehiclesForDate(dateStr) {
   const dow = new Date(dateStr + 'T00:00:00').getDay();
-  if (dow === 0) return [UNSCHEDULED_VEHICLE];
-  if (dow === 6) return [];
+  if (dow === 0 || dow === 6) return [];
   return CALENDAR_WEEKDAY_VEHICLES;
 }
 
@@ -872,19 +902,24 @@ async function fetchDaySchedule(date) {
   return { byVehicle };
 }
 
+// 기준일을 바꿉니다 (월 달력에서 날짜를 누르거나 "오늘" 버튼). 그날부터 이어서 12일치를 보여줍니다.
 async function selectCalendarDate(dateStr) {
   calendarSelectedDate = dateStr;
-  calendarWeekDates = getWeekDates(dateStr);
   renderCalendarGrid();
-  await loadCalendarWeek();
+  await loadCalendarWindow();
 }
 
-// 선택한 주(週)와, 그 바로 다음 주까지 함께 볼 수 있도록 두 주(총 14일)의 배차를 미리 가져옵니다.
-async function loadCalendarWeek() {
-  const nextWeekDates = getNextWeekDates(calendarWeekDates);
-  const allDates = [...calendarWeekDates, ...nextWeekDates];
-  const results = await Promise.all(allDates.map(fetchDaySchedule));
-  calendarWeekData = new Map(allDates.map((d, i) => [d, results[i]]));
+// 기준일부터 보여주는 12일치 배차 + 고정 "미정" 보관함을 한 번에 가져옵니다.
+async function loadCalendarWindow() {
+  const dates = getRollingDates(calendarSelectedDate);
+  const [results, unscheduled] = await Promise.all([
+    Promise.all(dates.map(fetchDaySchedule)),
+    fetchJSON(`/api/schedule?date=${encodeURIComponent(UNSCHEDULED_DATE)}&vehicle=${encodeURIComponent(UNSCHEDULED_VEHICLE)}`)
+      .then(data => data.items)
+      .catch(() => [])
+  ]);
+  calendarWeekData = new Map(dates.map((d, i) => [d, results[i]]));
+  calendarWeekData.set(UNSCHEDULED_DATE, { byVehicle: { [UNSCHEDULED_VEHICLE]: unscheduled } });
   renderCalendarGrid();
 }
 
@@ -903,11 +938,10 @@ function buildWeekBlockNode(weekDates, labelText) {
   return block;
 }
 
-// 주어진 주(일~토 7개 날짜)를 한 줄에 나란히 보여주는 영역을 만듭니다.
-// 월~금은 3.5t/5t/기타 세 줄이 함께 보이고, 토요일은 납품이 없어 아무것도 안 보이고(좁게),
-// 일요일은 차량 구분 없이 "미정"(아직 날짜/차량 못 정한 배차) 하나만 넓게 모아서 보여줍니다.
-// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜(이번 주/다음 주, 일요일 미정 보관함 포함)나
-// 다른 차량 칸으로 드래그해서 옮기는 것도 가능합니다.
+// 주어진 날짜들(일요일 제외, 보통 6개)을 한 줄에 나란히 보여주는 영역을 만듭니다.
+// 월~금은 3.5t(왼쪽)/5t(오른쪽)/기타가 함께 보이고, 토요일은 납품이 없어 아무것도 안 보이고(좁게) 표시합니다.
+// 같은 날짜 안에서 순서를 바꾸는 것은 물론, 다른 날짜나 왼쪽 "미정" 보관함, 다른 차량 칸으로
+// 드래그해서 옮기는 것도 가능합니다.
 function buildWeekStripNode(weekDates) {
   const strip = document.createElement('div');
   strip.className = 'cal-week-strip';
@@ -916,21 +950,20 @@ function buildWeekStripNode(weekDates) {
   const today = todayDateString();
   const dowNames = ['일', '월', '화', '수', '목', '금', '토'];
 
-  weekDates.forEach((dateStr, dowIndex) => {
-    const isSaturday = dowIndex === 6;
-    const isSunday = dowIndex === 0;
+  weekDates.forEach((dateStr) => {
+    const dow = new Date(dateStr + 'T00:00:00').getDay();
+    const isSaturday = dow === 6;
     const dayNum = Number(dateStr.split('-')[2]);
 
     const col = document.createElement('div');
     col.className = 'cal-day-col'
       + (isSaturday ? ' saturday' : '')
-      + (isSunday ? ' sunday-unscheduled' : '')
       + (dateStr === today ? ' today' : '')
       + (dateStr === calendarSelectedDate ? ' selected-day' : '');
 
     const header = document.createElement('div');
     header.className = 'cal-day-col-header';
-    header.innerHTML = `<span class="cal-day-dow">${dowNames[dowIndex]}</span><span class="cal-day-num">${dayNum}</span>`;
+    header.innerHTML = `<span class="cal-day-dow">${dowNames[dow]}</span><span class="cal-day-num">${dayNum}</span>`;
     col.appendChild(header);
 
     if (isSaturday) {
@@ -939,10 +972,6 @@ function buildWeekStripNode(weekDates) {
       off.className = 'cal-day-off-note';
       off.textContent = '휴무';
       col.appendChild(off);
-    } else if (isSunday) {
-      // 일요일은 차량 구분 없이 "미정" 보관함 하나만 크게 보여줍니다.
-      // 아직 날짜/차량을 못 정한 배차를 여기 등록해두고, 나중에 정해지면 실제 요일 칸으로 드래그해서 옮기면 됩니다.
-      col.appendChild(buildDayVehicleSection(dateStr, UNSCHEDULED_VEHICLE, isAdmin, '📋 미정 보관함'));
     } else {
       // 월~금은 3.5t(왼쪽)/5t(오른쪽)를 나란히 두고, 그 아래에 기타를 한 줄로 보여줍니다.
       const pair = document.createElement('div');
@@ -1055,16 +1084,6 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
   }
 
   section.appendChild(listEl);
-
-  // 미정 보관함은 항목을 하나씩 드래그하지 않고, 다음 주 일요일로 한꺼번에 옮길 수 있는 버튼을 둡니다.
-  if (vehicle === UNSCHEDULED_VEHICLE && isAdmin && items.length > 0) {
-    const moveAllBtn = document.createElement('button');
-    moveAllBtn.type = 'button';
-    moveAllBtn.className = 'cal-move-all-btn';
-    moveAllBtn.textContent = `▶ 다음 주로 ${items.length}건 모두 이동`;
-    moveAllBtn.addEventListener('click', () => moveAllUnscheduledToNextWeek(dateStr));
-    section.appendChild(moveAllBtn);
-  }
 
   // 목록의 빈 공간(항목이 없는 날, 또는 맨 끝)에 놓아도 추가/이동되도록 목록 자체도 드롭 대상으로 둡니다.
   if (isAdmin) {
@@ -1221,43 +1240,6 @@ async function addDayItem(date, vehicle, clientId) {
   renderCalendarGrid();
   await saveDayVehicleOrder(date, vehicle);
   showToast('배차 목록에 추가했습니다.');
-}
-
-// 미정 보관함(일요일 칸)에 쌓인 배차를 하나씩 드래그하지 않고, 다음 주 일요일 미정 보관함으로 한 번에 옮깁니다.
-// (다음 주 미정 보관함에 이미 있는 항목 뒤에 이어 붙이고, 원래 있던 주의 미정 보관함은 비웁니다.)
-async function moveAllUnscheduledToNextWeek(dateStr) {
-  const dayData = calendarWeekData.get(dateStr);
-  const items = (dayData && dayData.byVehicle && dayData.byVehicle[UNSCHEDULED_VEHICLE]) || [];
-  if (items.length === 0) return;
-
-  const targetDate = addDaysToDateStr(dateStr, 7);
-  if (!confirm(`미정 보관함의 ${items.length}건을 전부 다음 주 일요일(${targetDate})로 옮길까요?`)) return;
-
-  try {
-    const targetData = await fetchJSON(`/api/schedule?date=${encodeURIComponent(targetDate)}&vehicle=${encodeURIComponent(UNSCHEDULED_VEHICLE)}`);
-    const mergedItems = [
-      ...targetData.items.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })),
-      ...items.map(it => ({ itemId: null, clientId: it.id, note: it.note || '' }))
-    ];
-
-    await fetchJSON(`/api/schedule?date=${encodeURIComponent(targetDate)}&vehicle=${encodeURIComponent(UNSCHEDULED_VEHICLE)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: mergedItems })
-    });
-
-    await fetchJSON(`/api/schedule?date=${encodeURIComponent(dateStr)}&vehicle=${encodeURIComponent(UNSCHEDULED_VEHICLE)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: [] })
-    });
-
-    await loadCalendarWeek();
-    await loadCalendarMonth(calendarMonth);
-    showToast(`${items.length}건을 다음 주(${targetDate})로 옮겼습니다.`);
-  } catch (err) {
-    showToast(err.message);
-  }
 }
 
 async function saveDayNote(date, vehicle, itemId, note) {
@@ -1933,6 +1915,23 @@ function bindEvents() {
   });
 
   // ---------- 달력 탭 이벤트 ----------
+  // "오늘" 버튼: 기준일을 오늘로 되돌리고, 월 달력도 이번 달로 맞춥니다.
+  el('calTodayBtn').addEventListener('click', () => {
+    calendarFollowToday = true;
+    calendarMonth = todayDateString().slice(0, 7);
+    selectCalendarDate(todayDateString());
+    loadCalendarMonth(calendarMonth);
+  });
+
+  // 오늘 기준으로 보고 있는 중에 날짜가 바뀌면 자동으로 새 오늘로 넘어갑니다 (5분마다 확인).
+  setInterval(() => {
+    if (activeTab === 'calendar' && calendarFollowToday && calendarSelectedDate !== todayDateString()) {
+      calendarMonth = todayDateString().slice(0, 7);
+      selectCalendarDate(todayDateString());
+      loadCalendarMonth(calendarMonth);
+    }
+  }, 5 * 60 * 1000);
+
   el('calPrevMonth').addEventListener('click', () => {
     calendarMonth = shiftMonth(calendarMonth, -1);
     loadCalendarMonth(calendarMonth);
