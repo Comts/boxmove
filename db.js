@@ -71,6 +71,29 @@ async function initDb() {
     );
   `);
 
+  // "미정" 보관함은 예전에는 일요일 날짜마다 따로 있었지만, 이제는 날짜와 상관없이 한 곳(고정 날짜)에
+  // 계속 남아있습니다. 예전 일요일들에 들어있던 미정 항목은 이 고정 보관함으로 옮겨 담습니다(여러 번 실행해도 안전).
+  const UNSCHEDULED_DATE = '2000-01-01';
+  await pool.query(
+    `INSERT INTO schedule_days (date, vehicle) VALUES ($1, '미정') ON CONFLICT DO NOTHING`,
+    [UNSCHEDULED_DATE]
+  );
+  await pool.query(
+    `WITH base AS (
+       SELECT COALESCE(MAX(position) + 1, 0) AS start_pos
+       FROM schedule_items WHERE vehicle = '미정' AND date = $1
+     ),
+     moved AS (
+       SELECT id, ROW_NUMBER() OVER (ORDER BY date, position) AS rn
+       FROM schedule_items WHERE vehicle = '미정' AND date <> $1
+     )
+     UPDATE schedule_items si
+     SET date = $1, position = (SELECT start_pos FROM base) + moved.rn, completed_at = NULL
+     FROM moved WHERE si.id = moved.id`,
+    [UNSCHEDULED_DATE]
+  );
+  await pool.query(`DELETE FROM schedule_days WHERE vehicle = '미정' AND date <> $1`, [UNSCHEDULED_DATE]);
+
   // 재고 관리: 회사 전체가 공유하는 품목별 수량 (거래처별이 아니라 회사 전체 재고 1개)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS inventory_items (
