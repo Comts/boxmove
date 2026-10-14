@@ -43,6 +43,16 @@ body {
   font-size: 13px;
 }
 
+.refresh-btn {
+  font-size: 16px;
+  line-height: 1;
+  padding: 7px 10px;
+}
+
+.refresh-btn:disabled {
+  opacity: 0.5;
+}
+
 /* 화면 크기 조절(A−/A+): TV처럼 큰 화면용이라 좁은 화면(폰)에서는 숨깁니다 */
 .zoom-controls {
   display: flex;
