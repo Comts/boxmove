@@ -1533,6 +1533,42 @@ body {
   display: none;
 }
 
+/* 폰(좁은 화면): 지도는 화면의 약 1/3만 쓰고, 나머지는 목록이 차지하며 "오늘의 배차" 전체가 위아래로 스크롤됩니다.
+   (예전에는 지도가 절반 이상이고 목록 영역이 좁아서, 거래처가 여러 곳이면 아래로 내려가지 않았습니다.) */
+@media (max-width: 899px) {
+  .map {
+    flex: 0 0 34vh;
+    min-height: 190px;
+  }
+
+  .list-panel {
+    flex: 1 1 0;
+    min-height: 0;
+  }
+
+  #scheduleView {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #scheduleView > * {
+    flex-shrink: 0;
+  }
+
+  #scheduleView .schedule-list {
+    flex: none;
+    overflow: visible;
+    padding-bottom: 24px;
+  }
+
+  /* 다음 목적지/진행률은 스크롤해도 항상 맨 위에 붙어 있게 */
+  #scheduleView .schedule-progress-box {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+}
+
 @media (min-width: 900px) {
   .layout {
     flex-direction: row;
