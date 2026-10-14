@@ -101,11 +101,83 @@ function stepUiZoom(direction) {
   applyUiZoom();
 }
 
+// ---------- 실시간 갱신 (다른 기기에서 바꾼 내용이 TV 같은 화면에 바로 보이도록) ----------
+// 서버가 "바뀌었다"는 신호를 보낼 때만 지금 보고 있는 탭의 데이터를 새로 불러옵니다.
+let refreshPending = false;
+let liveRefreshTimer = null;
+
+// 입력창에 글자를 치는 중이거나, 드래그/모달 작업 중이면 화면을 새로 그리지 않고 잠시 기다립니다.
+function isUserBusy() {
+  const a = document.activeElement;
+  const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT');
+  const modalOpen = !!document.querySelector('.modal-overlay:not(.hidden)');
+  return typing || modalOpen || calDragIndex !== null;
+}
+
+async function refreshCurrentTab() {
+  try {
+    await refreshClients();
+    if (activeTab === 'calendar') {
+      await Promise.all([loadCalendarWindow(), loadCalendarMonth(calendarMonth)]);
+    } else if (activeTab === 'schedule') {
+      await loadSchedule(scheduleDate);
+    } else if (activeTab === 'inventory') {
+      await refreshInventory();
+    } else if (activeTab === 'pallet') {
+      await refreshPallets();
+    } else if (activeTab === 'bulletin') {
+      await refreshBulletin();
+    }
+  } catch (err) {
+    // 갱신 실패는 조용히 넘어갑니다 (다음 신호나 ↻ 버튼으로 다시 시도 가능)
+  }
+}
+
+function requestLiveRefresh() {
+  if (document.hidden) { refreshPending = true; return; }
+  if (isUserBusy()) { refreshPending = true; return; }
+  refreshPending = false;
+  clearTimeout(liveRefreshTimer);
+  liveRefreshTimer = setTimeout(refreshCurrentTab, 400); // 연달아 신호가 와도 한 번만
+}
+
+function startLiveUpdates() {
+  if (typeof EventSource === 'undefined') return;
+  let hasOpened = false;
+  const source = new EventSource('/api/events');
+
+  source.addEventListener('changed', () => {
+    if (Date.now() - lastLocalMutationAt < 2000) return; // 내가 방금 바꾼 것이면 이미 화면에 반영돼 있음
+    requestLiveRefresh();
+  });
+
+  // 연결이 끊겼다가 다시 붙으면, 그동안 놓친 변경이 있을 수 있으니 한 번 새로 불러옵니다.
+  source.addEventListener('open', () => {
+    if (hasOpened) requestLiveRefresh();
+    hasOpened = true;
+  });
+
+  // 입력/모달/드래그 때문에 미뤄둔 갱신은, 작업이 끝나면 바로 이어서 처리합니다.
+  setInterval(() => {
+    if (refreshPending && !document.hidden && !isUserBusy()) requestLiveRefresh();
+  }, 3000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && refreshPending) requestLiveRefresh();
+  });
+}
+
 async function init() {
   uiZoom = loadUiZoom();
   applyUiZoom();
   el('zoomOutBtn').addEventListener('click', () => stepUiZoom(-1));
   el('zoomInBtn').addEventListener('click', () => stepUiZoom(1));
+  el('refreshBtn').addEventListener('click', async () => {
+    const btn = el('refreshBtn');
+    btn.disabled = true;
+    await refreshCurrentTab();
+    btn.disabled = false;
+    showToast('새로고침했습니다.');
+  });
   window.addEventListener('resize', fitBodyHeight);
 
   const me = await fetchJSON('/api/me');
@@ -130,6 +202,8 @@ async function init() {
 
   // 기사님 계정은 로그인하면 바로 본인 차량의 오늘의 배차 화면부터 보여줍니다.
   switchTab(currentRole === 'viewer' ? 'schedule' : 'clients');
+
+  startLiveUpdates();
 }
 
 // 관리자 전용: Neon 무료 플랜(0.5GB) 대비 현재 DB 용량을 topbar 아래에 표시합니다.
@@ -223,7 +297,10 @@ function initMap() {
   });
 }
 
+let lastLocalMutationAt = 0; // 이 화면에서 직접 등록/수정/삭제한 마지막 시각 (내가 바꾼 것 때문에 화면이 또 새로고침되지 않도록)
+
 async function fetchJSON(url, options) {
+  if (options && options.method && options.method !== 'GET') lastLocalMutationAt = Date.now();
   const res = await fetch(url, options);
   if (res.status === 401) {
     window.location.href = '/login';
@@ -1059,6 +1136,10 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
           li.classList.add('dragging');
         });
         li.addEventListener('dragend', () => {
+          // 드롭 없이 취소된 드래그가 "작업 중" 상태로 남지 않도록 초기화 (정상 드롭은 이미 처리된 뒤라 안전)
+          calDragIndex = null;
+          calDragDate = null;
+          calDragVehicle = null;
           li.classList.remove('dragging');
           document.querySelectorAll('.cal-day-item').forEach(el2 => el2.classList.remove('drag-over'));
         });
