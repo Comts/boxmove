@@ -214,6 +214,45 @@ function isValidVehicle(v) {
   return typeof v === 'string' && ALL_SCHEDULABLE_VEHICLES.includes(v);
 }
 
+// ---------- 실시간 갱신 알림 (TV처럼 켜둔 화면이 컴퓨터에서 바꾼 내용을 바로 보도록) ----------
+// 화면(브라우저)이 /api/events 에 연결해 두면, 누군가 등록/수정/삭제에 성공할 때마다 서버가
+// "changed" 신호만 보내고, 화면은 그 신호를 받았을 때만 새로 불러옵니다.
+// 데이터를 주기적으로 계속 조회하지 않기 때문에 DB(Neon)를 쓸데없이 깨워두지 않습니다.
+const sseClients = new Set();
+
+app.get('/api/events', (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no' // 프록시가 신호를 모아두지 않고 바로 전달하도록
+  });
+  res.flushHeaders();
+  res.write('retry: 3000\n\n'); // 끊기면 3초 뒤 자동 재연결
+
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
+});
+
+// 연결이 조용히 끊기지 않도록 25초마다 빈 신호(주석)를 보냅니다 (DB는 사용하지 않음).
+setInterval(() => {
+  for (const client of sseClients) client.write(': ping\n\n');
+}, 25 * 1000).unref();
+
+function broadcastChange() {
+  for (const client of sseClients) client.write('event: changed\ndata: 1\n\n');
+}
+
+// 등록/수정/삭제 요청이 성공하면(응답 코드 400 미만) 연결된 모든 화면에 변경 신호를 보냅니다.
+app.use('/api', (req, res, next) => {
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    res.on('finish', () => {
+      if (res.statusCode < 400) broadcastChange();
+    });
+  }
+  next();
+});
+
 // ---------- 프론트엔드용 설정(공개 가능한 지도 클라이언트 ID만 전달) ----------
 app.get('/api/config', (req, res) => {
   res.json({
