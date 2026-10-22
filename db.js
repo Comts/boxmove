@@ -37,6 +37,10 @@ async function initDb() {
     );
   `);
 
+  // 우리 회사(출발/복귀 지점) 표시: 체크된 거래처가 배차 목록에 나오면 "회사 복귀" 줄로 취급하고,
+  // 그 줄을 경계로 회차(1회차, 2회차...)가 나뉩니다.
+  await pool.query(`ALTER TABLE clients ADD COLUMN IF NOT EXISTS is_base BOOLEAN NOT NULL DEFAULT false;`);
+
   // 예전 스키마(차량 구분 없이 date만 있던 구조)가 남아있으면, 배차 관련 테이블만
   // 새 구조(차량 구분 + 같은 거래처 하루 중복 방문 지원)로 다시 만듭니다.
   // 거래처 목록(clients 테이블)은 전혀 건드리지 않습니다.
@@ -160,6 +164,7 @@ function rowToClient(row) {
     memo: row.memo || '',
     lat: row.lat,
     lng: row.lng,
+    isBase: !!row.is_base,
     createdAt: row.created_at
   };
 }
@@ -177,10 +182,10 @@ async function getClientById(id) {
 
 async function createClient(client) {
   const { rows } = await pool.query(
-    `INSERT INTO clients (id, name, address, manager, phone, memo, lat, lng)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO clients (id, name, address, manager, phone, memo, lat, lng, is_base)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
-    [client.id, client.name, client.address, client.manager, client.phone, client.memo, client.lat, client.lng]
+    [client.id, client.name, client.address, client.manager, client.phone, client.memo, client.lat, client.lng, !!client.isBase]
   );
   return rowToClient(rows[0]);
 }
@@ -188,10 +193,10 @@ async function createClient(client) {
 async function updateClient(id, fields) {
   const { rows } = await pool.query(
     `UPDATE clients
-     SET name = $2, address = $3, manager = $4, phone = $5, memo = $6, lat = $7, lng = $8
+     SET name = $2, address = $3, manager = $4, phone = $5, memo = $6, lat = $7, lng = $8, is_base = $9
      WHERE id = $1
      RETURNING *`,
-    [id, fields.name, fields.address, fields.manager, fields.phone, fields.memo, fields.lat, fields.lng]
+    [id, fields.name, fields.address, fields.manager, fields.phone, fields.memo, fields.lat, fields.lng, !!fields.isBase]
   );
   return rows[0] ? rowToClient(rows[0]) : null;
 }
