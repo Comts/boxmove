@@ -541,8 +541,27 @@ function populateScheduleAddSelect() {
   select.value = current || '';
 }
 
-// 상단에 "지금 몇 번째 목적지로 가고 있는지(예: 2/5)"와 다음 목적지 이름을 보여줍니다.
-// 완료 체크가 안 된 첫 항목을 "다음 목적지"로 보고, 그 항목의 순번을 분자로 씁니다.
+// 회차 번호: "우리 회사(출발/복귀)"로 표시된 거래처는 번호 없이 구분선(🏠)으로 두고,
+// 그 사이에 있는 납품 업체들은 같은 회차 번호를 갖습니다. (예: 오전에 A·B·C → 1, 회사 복귀, 오후에 D·E → 2)
+// 반환: items와 같은 순서의 [{ base: boolean, trip: number|null }]
+function computeTripLabels(items) {
+  let trip = 0;
+  let inTrip = false;
+  return items.map(it => {
+    if (it.isBase) {
+      inTrip = false;
+      return { base: true, trip: null };
+    }
+    if (!inTrip) {
+      trip += 1;
+      inTrip = true;
+    }
+    return { base: false, trip };
+  });
+}
+
+// 상단에 "지금 몇 번째 납품 업체로 가고 있는지(예: 2/5)"와 다음 목적지 이름을 보여줍니다.
+// 회사(복귀) 줄은 개수에 넣지 않고 납품 업체만 셉니다. 다음 목적지는 완료 체크가 안 된 첫 항목입니다(회사 복귀 포함).
 function updateScheduleProgress() {
   const box = el('scheduleProgressBox');
   if (!box) return;
@@ -552,18 +571,21 @@ function updateScheduleProgress() {
     return;
   }
 
-  const total = scheduleItems.length;
-  const completedCount = scheduleItems.filter(it => !!it.completedAt).length;
-  const allDone = completedCount >= total;
-  const currentNumber = allDone ? total : completedCount + 1;
+  const deliveries = scheduleItems.filter(it => !it.isBase);
+  const total = deliveries.length;
+  const doneCount = deliveries.filter(it => !!it.completedAt).length;
+  const nextItem = scheduleItems.find(it => !it.completedAt);
+  const currentNumber = Math.min(doneCount + 1, total);
 
-  el('scheduleProgressCount').textContent = `${currentNumber}/${total}`;
+  el('scheduleProgressCount').textContent = total > 0 ? `${currentNumber}/${total}` : '';
 
   const nextEl = el('scheduleProgressNext');
-  if (allDone) {
+  if (!nextItem) {
     nextEl.textContent = '🎉 오늘 배차를 모두 완료했습니다';
+  } else if (nextItem.isBase) {
+    nextEl.textContent = `다음 목적지: 🏠 ${nextItem.name} (복귀)`;
   } else {
-    nextEl.textContent = `다음 목적지: ${scheduleItems[completedCount].name}`;
+    nextEl.textContent = `다음 목적지: ${nextItem.name}`;
   }
 
   box.classList.remove('hidden');
@@ -593,12 +615,14 @@ function renderScheduleList() {
   }
 
   const { etas, segments } = computeScheduleTimes(scheduleItems, scheduleStartedAt);
+  const tripLabels = computeTripLabels(scheduleItems);
 
   scheduleItems.forEach((item, index) => {
     const li = document.createElement('li');
     const eta = etas[index];
     const isDone = eta.completed;
-    li.className = 'schedule-item' + (isDone ? ' done' : '');
+    const label = tripLabels[index];
+    li.className = 'schedule-item' + (isDone ? ' done' : '') + (label.base ? ' base' : '');
 
     let etaHtml = '';
     if (isDone) {
@@ -618,9 +642,9 @@ function renderScheduleList() {
     const memoHtml = item.memo ? `<div class="memo">📝 ${escapeHtml(item.memo)}</div>` : '';
 
     li.innerHTML = `
-      <div class="schedule-order-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</div>
+      <div class="schedule-order-badge${isDone ? ' done' : ''}${label.base ? ' base' : ''}">${isDone ? '✓' : (label.base ? '🏠' : label.trip)}</div>
       <div class="schedule-item-info">
-        <div class="name">${escapeHtml(item.name)}</div>
+        <div class="name">${escapeHtml(item.name)}${label.base ? ' <span class="base-tag">출발/복귀</span>' : ''}</div>
         <div class="addr">${escapeHtml(item.address)}</div>
         ${contactHtml}
         ${memoHtml}
@@ -714,6 +738,9 @@ function moveScheduleItem(index, delta) {
 }
 
 function removeScheduleItem(index) {
+  const target = scheduleItems[index];
+  if (!target) return;
+  if (!confirm(`"${target.name}"을(를) 이 배차 목록에서 지울까요?`)) return;
   scheduleItems.splice(index, 1);
   renderScheduleList();
   renderScheduleMap();
@@ -757,7 +784,14 @@ function renderScheduleMap() {
   const bounds = new naver.maps.LatLngBounds();
   const path = [];
 
-  pts.forEach((item, index) => {
+  // 목록과 같은 회차 번호를 지도 마커에도 씁니다 (회사 복귀는 🏠).
+  const tripByItem = new Map();
+  computeTripLabels(scheduleItems).forEach((lab, i) => tripByItem.set(scheduleItems[i], lab));
+
+  pts.forEach((item) => {
+    const lab = tripByItem.get(item) || { base: false, trip: 1 };
+    const markerText = lab.base ? '🏠' : lab.trip;
+    const markerBg = lab.base ? '#6b7280' : '#1f6feb';
     const position = new naver.maps.LatLng(item.lat, item.lng);
     path.push(position);
     bounds.extend(position);
@@ -767,14 +801,14 @@ function renderScheduleMap() {
       map,
       title: item.name,
       icon: {
-        content: `<div style="background:#1f6feb;color:#fff;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);">${index + 1}</div>`,
+        content: `<div style="background:${markerBg};color:#fff;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.35);">${markerText}</div>`,
         anchor: new naver.maps.Point(14, 14)
       }
     });
 
     const infoWindow = new naver.maps.InfoWindow({
       content: `<div style="padding:10px 12px; font-size:13px; line-height:1.5; max-width:220px;">
-        <strong>${index + 1}. ${escapeHtml(item.name)}</strong><br/>
+        <strong>${lab.base ? '🏠' : lab.trip + '회차 ·'} ${escapeHtml(item.name)}</strong><br/>
         ${escapeHtml(item.address)}<br/>
         ${item.manager ? '담당자: ' + escapeHtml(item.manager) + '<br/>' : ''}
         ${item.phone ? '연락처: ' + escapeHtml(item.phone) + '<br/>' : ''}
@@ -1089,9 +1123,11 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
     empty.textContent = '-';
     listEl.appendChild(empty);
   } else {
+    const tripLabels = computeTripLabels(items); // 달력도 회차 번호로 표시 (회사 복귀는 🏠)
     items.forEach((item, index) => {
       const isDone = !!item.completedAt;
       const note = item.note || '';
+      const tripLabel = tripLabels[index];
 
       const li = document.createElement('li');
       li.className = 'cal-day-item' + (isDone ? ' done' : '');
@@ -1100,7 +1136,7 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
 
       li.innerHTML = `
         <div class="cal-day-item-top">
-          <span class="cal-day-item-badge${isDone ? ' done' : ''}">${isDone ? '✓' : index + 1}</span>
+          <span class="cal-day-item-badge${isDone ? ' done' : ''}${tripLabel.base ? ' base' : ''}">${isDone ? '✓' : (tripLabel.base ? '🏠' : tripLabel.trip)}</span>
           <span class="cal-day-item-name">${escapeHtml(item.name)}</span>
         </div>
       `;
@@ -1306,6 +1342,10 @@ async function saveDayVehicleOrder(date, vehicle) {
 async function removeDayItem(date, vehicle, index) {
   const dayData = calendarWeekData.get(date);
   if (!dayData || !dayData.byVehicle || !dayData.byVehicle[vehicle]) return;
+  const target = dayData.byVehicle[vehicle][index];
+  if (!target) return;
+  // 잘못 눌러서 지워지는 일이 없도록 한 번 확인합니다.
+  if (!confirm(`"${target.name}"을(를) 이 배차 목록에서 지울까요?`)) return;
   dayData.byVehicle[vehicle].splice(index, 1);
   renderCalendarGrid();
   await saveDayVehicleOrder(date, vehicle);
@@ -1840,7 +1880,7 @@ async function deleteBulletinNoteHandler(id) {
 }
 
 // ---------- 모달 ----------
-const FORM_FIELD_IDS = ['fName', 'fAddress', 'fManager', 'fPhone', 'fMemo'];
+const FORM_FIELD_IDS = ['fName', 'fAddress', 'fManager', 'fPhone', 'fMemo', 'fIsBase'];
 
 function setFormReadOnly(readOnly) {
   FORM_FIELD_IDS.forEach(id => { el(id).disabled = readOnly; });
@@ -1870,6 +1910,7 @@ function openEditModal(client) {
   el('fManager').value = client.manager || '';
   el('fPhone').value = client.phone || '';
   el('fMemo').value = client.memo || '';
+  el('fIsBase').checked = !!client.isBase;
   setFormReadOnly(!isAdmin);
   el('formError').classList.add('hidden');
   el('modalOverlay').classList.remove('hidden');
@@ -1905,7 +1946,8 @@ function bindEvents() {
       address: el('fAddress').value.trim(),
       manager: el('fManager').value.trim(),
       phone: el('fPhone').value.trim(),
-      memo: el('fMemo').value.trim()
+      memo: el('fMemo').value.trim(),
+      isBase: el('fIsBase').checked
     };
 
     try {
