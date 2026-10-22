@@ -1493,6 +1493,46 @@ body {
   font-family: inherit;
 }
 
+.modal form label.checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: #666;
+}
+
+.modal form label.checkbox-label input {
+  width: auto;
+  margin: 2px 0 0;
+  flex-shrink: 0;
+}
+
+/* 회사(출발/복귀) 줄 표시 */
+.schedule-item.base {
+  background: #f3f4f6;
+}
+
+.schedule-order-badge.base {
+  background: #6b7280;
+  font-size: 14px;
+}
+
+.base-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #e5e7eb;
+  border-radius: 4px;
+  padding: 0 5px;
+  vertical-align: middle;
+}
+
+.cal-day-item-badge.base {
+  background: #6b7280;
+  font-size: 8px;
+}
+
 .modal-actions {
   display: flex;
   gap: 8px;
