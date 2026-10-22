@@ -310,7 +310,8 @@ app.post('/api/clients', requireAdmin, asyncRoute(async (req, res) => {
     phone,
     memo,
     lat,
-    lng
+    lng,
+    isBase: req.body?.isBase === true
   });
 
   res.status(201).json(newClient);
@@ -339,7 +340,9 @@ app.put('/api/clients/:id', requireAdmin, asyncRoute(async (req, res) => {
     }
   }
 
-  const updated = await db.updateClient(req.params.id, { name, address, manager, phone, memo, lat, lng });
+  const isBase = req.body?.isBase !== undefined ? req.body.isBase === true : existing.isBase;
+
+  const updated = await db.updateClient(req.params.id, { name, address, manager, phone, memo, lat, lng, isBase });
   res.json(updated);
 }));
 
