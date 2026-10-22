@@ -1533,6 +1533,20 @@ body {
   font-size: 8px;
 }
 
+/* 달력에서 우리 회사(복귀) 줄은 가운데 정렬 + 회색 배경으로 업체와 한눈에 구분 */
+.cal-day-item.base {
+  background: #eceef1;
+  text-align: center;
+}
+
+.cal-day-item.base .cal-day-item-top {
+  justify-content: center;
+}
+
+.cal-day-item.base .cal-day-item-name {
+  color: #6b7280;
+}
+
 .modal-actions {
   display: flex;
   gap: 8px;
