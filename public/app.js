@@ -1130,7 +1130,7 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
       const tripLabel = tripLabels[index];
 
       const li = document.createElement('li');
-      li.className = 'cal-day-item' + (isDone ? ' done' : '');
+      li.className = 'cal-day-item' + (isDone ? ' done' : '') + (tripLabel.base ? ' base' : '');
       li.dataset.index = String(index);
       li.title = `${item.name} · ${item.address}`;
 
