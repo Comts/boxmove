@@ -1149,18 +1149,21 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
         removeBtn.addEventListener('click', () => removeDayItem(dateStr, vehicle, index));
         li.appendChild(removeBtn);
 
-        const noteInput = document.createElement('input');
-        noteInput.type = 'text';
-        noteInput.className = 'cal-day-note-input';
-        noteInput.placeholder = '수량';
-        noteInput.value = note;
-        noteInput.maxLength = 200;
-        if (item.itemId) {
-          noteInput.addEventListener('blur', () => saveDayNote(dateStr, vehicle, item.itemId, noteInput.value));
-        } else {
-          noteInput.disabled = true; // 방금 추가/이동되어 아직 저장 중인 항목
+        // 우리 회사(출발/복귀) 줄은 수량을 적을 일이 없으므로 입력창을 아예 만들지 않아 칸을 아낍니다.
+        if (!item.isBase) {
+          const noteInput = document.createElement('input');
+          noteInput.type = 'text';
+          noteInput.className = 'cal-day-note-input';
+          noteInput.placeholder = '수량';
+          noteInput.value = note;
+          noteInput.maxLength = 200;
+          if (item.itemId) {
+            noteInput.addEventListener('blur', () => saveDayNote(dateStr, vehicle, item.itemId, noteInput.value));
+          } else {
+            noteInput.disabled = true; // 방금 추가/이동되어 아직 저장 중인 항목
+          }
+          li.appendChild(noteInput);
         }
-        li.appendChild(noteInput);
 
         // 드래그로 순서를 바꾸거나(같은 날짜/차량), 다른 날짜나 다른 차량 칸으로 옮길 수 있습니다.
         li.draggable = true;
