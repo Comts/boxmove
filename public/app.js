@@ -111,7 +111,8 @@ function isUserBusy() {
   const a = document.activeElement;
   const typing = a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT');
   const modalOpen = !!document.querySelector('.modal-overlay:not(.hidden)');
-  return typing || modalOpen || calDragIndex !== null;
+  const saving = calSavesPending > 0 || scheduleSaveInFlight; // 내가 옮긴 순서를 저장하는 중에는 화면을 새로 덮어쓰지 않음
+  return typing || modalOpen || saving || calDragIndex !== null;
 }
 
 async function refreshCurrentTab() {
@@ -300,8 +301,10 @@ function initMap() {
 let lastLocalMutationAt = 0; // 이 화면에서 직접 등록/수정/삭제한 마지막 시각 (내가 바꾼 것 때문에 화면이 또 새로고침되지 않도록)
 
 async function fetchJSON(url, options) {
-  if (options && options.method && options.method !== 'GET') lastLocalMutationAt = Date.now();
+  const isMutation = !!(options && options.method && options.method !== 'GET');
+  if (isMutation) lastLocalMutationAt = Date.now();
   const res = await fetch(url, options);
+  if (isMutation) lastLocalMutationAt = Date.now(); // 응답이 늦게 와도 "방금 내가 바꾼 것"으로 인식되도록 끝난 시각도 기록
   if (res.status === 401) {
     window.location.href = '/login';
     throw new Error('로그인이 필요합니다.');
@@ -748,19 +751,42 @@ function removeScheduleItem(index) {
 }
 
 // 순서 변경/추가/삭제 시 자동으로 저장합니다 (별도의 "저장" 버튼이 필요 없습니다).
+// (달력과 마찬가지로, 저장 중에 또 바뀌면 끝난 직후 최신 상태를 한 번 더 저장해서 순서가 꼬이지 않게 합니다.)
+let scheduleSaveInFlight = false;
+let scheduleSaveDirty = false;
+
 async function saveScheduleOrder() {
+  if (scheduleSaveInFlight) {
+    scheduleSaveDirty = true;
+    return;
+  }
+  scheduleSaveInFlight = true;
   try {
-    const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(scheduleDate)}&vehicle=${encodeURIComponent(selectedVehicle)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: scheduleItems.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })) })
-    });
-    scheduleItems = data.items;
-    scheduleStartedAt = data.startedAt;
-    renderScheduleList();
-    renderScheduleMap();
+    do {
+      scheduleSaveDirty = false;
+      const snapshot = scheduleItems.slice();
+      const data = await fetchJSON(`/api/schedule?date=${encodeURIComponent(scheduleDate)}&vehicle=${encodeURIComponent(selectedVehicle)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: snapshot.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })) })
+      });
+
+      if (data.items.length === snapshot.length) {
+        snapshot.forEach((it, i) => { if (!it.itemId) it.itemId = data.items[i].itemId; });
+      }
+
+      if (!scheduleSaveDirty) {
+        scheduleItems = data.items;
+        scheduleStartedAt = data.startedAt;
+        renderScheduleList();
+        renderScheduleMap();
+      }
+    } while (scheduleSaveDirty);
   } catch (err) {
     showToast(err.message);
+    await loadSchedule(scheduleDate);
+  } finally {
+    scheduleSaveInFlight = false;
   }
 }
 
@@ -1365,22 +1391,66 @@ function moveDraggedItem(targetDate, targetVehicle, targetIndex) {
   }
 }
 
+// 같은 날짜+차량 칸에 대한 저장은 한 번에 하나씩만 서버로 보냅니다.
+// (빠르게 여러 번 옮겨도, 저장 중에 또 바뀌면 끝난 직후 "가장 최신 상태"를 한 번 더 저장합니다.
+//  예전에는 먼저 보낸 저장의 응답이 늦게 도착해서 방금 옮긴 순서를 덮어쓰는 문제가 있었습니다.)
+const daySaveState = new Map(); // 'date|vehicle' -> { inFlight, dirty }
+let calSavesPending = 0;
+
 async function saveDayVehicleOrder(date, vehicle) {
-  const dayData = calendarWeekData.get(date);
-  if (!dayData || !dayData.byVehicle) return;
-  const items = dayData.byVehicle[vehicle];
-  if (!items) return;
+  const key = `${date}|${vehicle}`;
+  let state = daySaveState.get(key);
+  if (!state) {
+    state = { inFlight: false, dirty: false };
+    daySaveState.set(key, state);
+  }
+  if (state.inFlight) {
+    state.dirty = true;
+    return;
+  }
+
+  state.inFlight = true;
+  calSavesPending++;
+  let failed = false;
   try {
-    const res = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(vehicle)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: items.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })) })
-    });
-    dayData.byVehicle[vehicle] = res.items; // 실제 itemId/순서를 서버 응답으로 다시 채움
-    renderCalendarGrid();
-    await loadCalendarMonth(calendarMonth);
+    do {
+      state.dirty = false;
+      const dayData = calendarWeekData.get(date);
+      const items = dayData && dayData.byVehicle && dayData.byVehicle[vehicle];
+      if (!items) break;
+
+      const snapshot = items.slice();
+      const res = await fetchJSON(`/api/schedule?date=${encodeURIComponent(date)}&vehicle=${encodeURIComponent(vehicle)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: snapshot.map(it => ({ itemId: it.itemId, clientId: it.id, note: it.note || '' })) })
+      });
+
+      // 서버가 새로 정해준 itemId를 방금 보낸 항목에 채워둡니다 (다음 저장 때 중복 생성되지 않도록).
+      if (res.items.length === snapshot.length) {
+        snapshot.forEach((it, i) => { if (!it.itemId) it.itemId = res.items[i].itemId; });
+      }
+
+      // 저장 중에 또 바뀐 게 없을 때만 서버 응답으로 화면을 맞추고, 바뀌었으면 화면은 그대로 두고 한 번 더 저장합니다.
+      if (!state.dirty) {
+        const latest = calendarWeekData.get(date);
+        if (latest && latest.byVehicle) latest.byVehicle[vehicle] = res.items;
+        renderCalendarGrid();
+      }
+    } while (state.dirty);
   } catch (err) {
+    failed = true;
     showToast(err.message);
+  } finally {
+    state.inFlight = false;
+    calSavesPending--;
+  }
+
+  if (failed) {
+    await loadCalendarWindow(); // 저장 실패 시 서버에 있는 실제 상태로 화면을 되돌림
+  }
+  if (calSavesPending === 0) {
+    await loadCalendarMonth(calendarMonth); // 모든 저장이 끝난 뒤 월 달력의 건수만 한 번 갱신
   }
 }
 
