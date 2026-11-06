@@ -1100,6 +1100,41 @@ function buildWeekStripNode(weekDates) {
   return strip;
 }
 
+let infoPopupTimer = null;
+
+function hideClientInfo() {
+  clearTimeout(infoPopupTimer);
+  const popup = el('infoPopup');
+  if (popup) popup.classList.add('hidden');
+  document.querySelectorAll('.cal-day-item.info-selected').forEach(n => n.classList.remove('info-selected'));
+}
+
+function showClientInfo(item, liEl) {
+  const popup = el('infoPopup');
+  if (!popup) return;
+
+  el('infoPopupName').textContent = item.name;
+  el('infoPopupAddr').textContent = item.address || '';
+
+  const contact = [];
+  if (item.manager) contact.push(`담당자 ${item.manager}`);
+  if (item.phone) contact.push(item.phone);
+  const contactEl = el('infoPopupContact');
+  contactEl.textContent = contact.join(' · ');
+  contactEl.classList.toggle('hidden', contact.length === 0);
+
+  const memoEl = el('infoPopupMemo');
+  memoEl.textContent = item.memo ? `📝 ${item.memo}` : '';
+  memoEl.classList.toggle('hidden', !item.memo);
+
+  document.querySelectorAll('.cal-day-item.info-selected').forEach(n => n.classList.remove('info-selected'));
+  if (liEl) liEl.classList.add('info-selected');
+
+  popup.classList.remove('hidden');
+  clearTimeout(infoPopupTimer);
+  infoPopupTimer = setTimeout(hideClientInfo, 6000); // 6초 뒤 자동으로 사라짐
+}
+
 // 하루 칸 안에서 줄 한 개 분량(라벨 + 목록 + 검색해서 추가하는 입력창)을 만듭니다.
 // labelText를 따로 주지 않으면 vehicle 이름 그대로를 라벨로 씁니다(일요일 "미정" 보관함은 안내 문구를 따로 줍니다).
 function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
@@ -1198,6 +1233,13 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
         noteText.textContent = `📦${note}`;
         li.appendChild(noteText);
       }
+
+      // 업체를 누르면(리모컨 확인 버튼/터치) 화면 아래에 주소·담당자·연락처 안내창을 띄웁니다.
+      // (마우스를 올려야만 보이는 툴팁은 TV/폰에서 안 뜨기 때문입니다.)
+      li.addEventListener('click', (e) => {
+        if (e.target.closest('button, input')) return;
+        showClientInfo(item, li);
+      });
 
       listEl.appendChild(li);
     });
