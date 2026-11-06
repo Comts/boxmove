@@ -1135,7 +1135,39 @@ function hideClientInfo() {
   document.querySelectorAll('.cal-day-item.info-selected').forEach(n => n.classList.remove('info-selected'));
 }
 
-function showClientInfo(item, liEl) {
+// 안내창을 누른 위치(마우스/리모컨 커서 높이) 바로 아래에 띄웁니다. 아래쪽 공간이 부족하면 위쪽에 띄웁니다.
+// 화면 크기 조절(A−/A+)로 zoom이 걸려 있어도 맞도록, 화면 좌표를 zoom으로 나눠서 위치를 잡습니다.
+function positionInfoPopup(popup, liEl, evt) {
+  let x = evt && evt.clientX;
+  let y = evt && evt.clientY;
+  if (!x && !y && liEl) { // 키보드/리모컨 확인 버튼처럼 좌표가 없으면 누른 업체 칸 기준
+    const r = liEl.getBoundingClientRect();
+    x = r.left + r.width / 2;
+    y = r.bottom;
+  }
+  const z = uiZoom || 1;
+  const vw = window.innerWidth / z;
+  const vh = window.innerHeight / z;
+  const gap = 12;
+
+  popup.style.visibility = 'hidden';
+  popup.classList.remove('hidden');
+  const w = popup.offsetWidth;
+  const h = popup.offsetHeight;
+
+  let left = (x || 0) / z - w / 2;
+  left = Math.max(8, Math.min(left, vw - w - 8));
+
+  let top = (y || 0) / z + gap;
+  if (top + h > vh - 8) top = (y || 0) / z - h - gap; // 아래 공간이 부족하면 위로
+  top = Math.max(8, top);
+
+  popup.style.left = `${left}px`;
+  popup.style.top = `${top}px`;
+  popup.style.visibility = 'visible';
+}
+
+function showClientInfo(item, liEl, evt) {
   const popup = el('infoPopup');
   if (!popup) return;
 
@@ -1156,7 +1188,7 @@ function showClientInfo(item, liEl) {
   document.querySelectorAll('.cal-day-item.info-selected').forEach(n => n.classList.remove('info-selected'));
   if (liEl) liEl.classList.add('info-selected');
 
-  popup.classList.remove('hidden');
+  positionInfoPopup(popup, liEl, evt);
   clearTimeout(infoPopupTimer);
   infoPopupTimer = setTimeout(hideClientInfo, 6000); // 6초 뒤 자동으로 사라짐
 }
@@ -1264,7 +1296,7 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
       // (마우스를 올려야만 보이는 툴팁은 TV/폰에서 안 뜨기 때문입니다.)
       li.addEventListener('click', (e) => {
         if (e.target.closest('button, input')) return;
-        showClientInfo(item, li);
+        showClientInfo(item, li, e);
       });
 
       listEl.appendChild(li);
