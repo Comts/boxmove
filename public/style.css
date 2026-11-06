@@ -1590,11 +1590,10 @@ body {
 /* 달력에서 업체를 눌렀을 때 화면 아래에 뜨는 주소/연락처 안내창 */
 .info-popup {
   position: fixed;
-  bottom: 56px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: calc(100% - 32px);
-  max-width: 420px;
+  top: 0;
+  left: 0;
+  width: 300px;
+  max-width: calc(100% - 16px);
   background: #1f2430;
   color: white;
   border-radius: 12px;
