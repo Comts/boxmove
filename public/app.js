@@ -172,6 +172,14 @@ async function init() {
   applyUiZoom();
   el('zoomOutBtn').addEventListener('click', () => stepUiZoom(-1));
   el('zoomInBtn').addEventListener('click', () => stepUiZoom(1));
+
+  // 안내창 닫기: 안내창을 누르거나, 안내창/업체 칸 밖의 아무 곳이나 누르면 닫힙니다 (6초 뒤 자동으로도 닫힘).
+  // (HTML 안의 onclick은 보안 설정(CSP)상 막혀 있어서 여기서 직접 연결합니다.)
+  el('infoPopup').addEventListener('click', hideClientInfo);
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#infoPopup') || e.target.closest('.cal-day-item')) return;
+    hideClientInfo();
+  });
   el('refreshBtn').addEventListener('click', async () => {
     const btn = el('refreshBtn');
     btn.disabled = true;
@@ -1127,9 +1135,11 @@ function buildWeekStripNode(weekDates) {
 }
 
 let infoPopupTimer = null;
+let infoPopupItemKey = null; // 지금 안내창에 떠 있는 업체 항목 (같은 항목을 또 누르면 닫기 위해 기억)
 
 function hideClientInfo() {
   clearTimeout(infoPopupTimer);
+  infoPopupItemKey = null;
   const popup = el('infoPopup');
   if (popup) popup.classList.add('hidden');
   document.querySelectorAll('.cal-day-item.info-selected').forEach(n => n.classList.remove('info-selected'));
@@ -1170,6 +1180,14 @@ function positionInfoPopup(popup, liEl, evt) {
 function showClientInfo(item, liEl, evt) {
   const popup = el('infoPopup');
   if (!popup) return;
+
+  // 이미 떠 있는 같은 업체를 한 번 더 누르면 닫습니다.
+  const key = item.itemId || `${item.id}|${item.name}`;
+  if (!popup.classList.contains('hidden') && infoPopupItemKey === key) {
+    hideClientInfo();
+    return;
+  }
+  infoPopupItemKey = key;
 
   el('infoPopupName').textContent = item.name;
   el('infoPopupAddr').textContent = item.address || '';
