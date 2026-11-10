@@ -1262,12 +1262,22 @@ function buildDayVehicleSection(dateStr, vehicle, isAdmin, labelText) {
 
         // 우리 회사(출발/복귀) 줄은 수량을 적을 일이 없으므로 입력창을 아예 만들지 않아 칸을 아낍니다.
         if (!item.isBase) {
-          const noteInput = document.createElement('input');
-          noteInput.type = 'text';
+          // 한 줄짜리 입력창은 긴 메모가 옆으로 잘려서, 줄바꿈이 되고 내용만큼 높이가 자라는 입력창을 씁니다.
+          const noteInput = document.createElement('textarea');
+          noteInput.rows = 1;
           noteInput.className = 'cal-day-note-input';
           noteInput.placeholder = '수량';
           noteInput.value = note;
           noteInput.maxLength = 200;
+          const autosizeNote = () => {
+            noteInput.style.height = 'auto';
+            noteInput.style.height = `${noteInput.scrollHeight}px`;
+          };
+          noteInput.addEventListener('input', autosizeNote);
+          noteInput.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') { ev.preventDefault(); noteInput.blur(); } // Enter = 저장(입력 완료)
+          });
+          setTimeout(autosizeNote, 0); // 화면에 붙은 뒤 높이를 맞춤
           if (item.itemId) {
             noteInput.addEventListener('blur', () => saveDayNote(dateStr, vehicle, item.itemId, noteInput.value));
           } else {
